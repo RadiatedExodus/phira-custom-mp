@@ -178,3 +178,46 @@ impl<S, R> Drop for Stream<S, R> {
         self.recv_task_handle.abort();
     }
 }
+
+#[cfg(test)]
+mod local_chart_protocol_tests {
+    use super::*;
+
+    #[test]
+    fn chunk_roundtrip() {
+        let packet = ClientCommand::LocalUploadChunk {
+            offset: 64 * 1024,
+            data: vec![1, 2, 3, 4, 5],
+        };
+        let mut bytes = Vec::new();
+        encode_packet(&packet, &mut bytes);
+        match decode_packet::<ClientCommand>(&bytes).unwrap() {
+            ClientCommand::LocalUploadChunk { offset, data } => {
+                assert_eq!(offset, 64 * 1024);
+                assert_eq!(data, vec![1, 2, 3, 4, 5]);
+            }
+            _ => panic!("wrong client command"),
+        }
+    }
+
+    #[test]
+    fn room_chart_response_roundtrip() {
+        let packet = ServerCommand::FetchLocalChunk(Ok(LocalChartChunk {
+            offset: 0,
+            total_size: 8,
+            sha256: "a".repeat(64),
+            data: vec![0, 1, 2, 3],
+        }));
+        let mut bytes = Vec::new();
+        encode_packet(&packet, &mut bytes);
+        match decode_packet::<ServerCommand>(&bytes).unwrap() {
+            ServerCommand::FetchLocalChunk(Ok(chunk)) => {
+                assert_eq!(chunk.offset, 0);
+                assert_eq!(chunk.total_size, 8);
+                assert_eq!(chunk.data, vec![0, 1, 2, 3]);
+                assert_eq!(chunk.sha256.len(), 64);
+            }
+            _ => panic!("wrong server response"),
+        }
+    }
+}
