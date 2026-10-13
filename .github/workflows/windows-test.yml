@@ -41,6 +41,8 @@ jobs:
         run: cargo build --locked --release -p phira-main --target x86_64-pc-windows-msvc
       - name: Test private chart selection
         run: cargo test --locked --release -p phira --lib multiplayer_selection_tests --target x86_64-pc-windows-msvc
+      - name: Test verified cache and saving
+        run: cargo test --locked --release -p phira --lib mp::cache::tests --target x86_64-pc-windows-msvc
       - name: Package portable client
         shell: pwsh
         run: |

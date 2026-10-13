@@ -1,6 +1,7 @@
 name: Custom multiplayer server
 
 on:
+  workflow_dispatch:
   push:
     paths:
       - "vendor/phira-mp/**"
@@ -12,14 +13,33 @@ on:
 
 jobs:
   server-build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust
         run: rustup toolchain install stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: vendor/phira-mp
       - name: Check multiplayer server and client
         run: cargo check --manifest-path vendor/phira-mp/Cargo.toml --workspace
       - name: Run multiplayer protocol tests
-        run: cargo test --manifest-path vendor/phira-mp/Cargo.toml -p phira-mp-common
+        run: cargo test --manifest-path vendor/phira-mp/Cargo.toml --workspace
+      - name: Build Linux multiplayer server
+        run: cargo build --release --manifest-path vendor/phira-mp/Cargo.toml -p phira-mp-server
+      - name: Package server
+        run: |
+          mkdir -p dist
+          cp vendor/phira-mp/target/release/phira-mp-server dist/
+          cp docs/multiplayer-host-local-charts.md dist/README.md
+          git rev-parse HEAD > dist/source-commit.txt
+          (cd dist && sha256sum phira-mp-server > SHA256SUMS.txt)
+          tar -czf phira-mp-linux-x64.tar.gz -C dist .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: phira-mp-linux-x64-${{ github.sha }}
+          path: phira-mp-linux-x64.tar.gz
+          if-no-files-found: error
+          retention-days: 30

@@ -72,3 +72,7 @@ msg-room-cycle =
         [true] 房間已切換為循環模式
        *[other] 房間已切換為普通模式
     }
+
+local-save = 儲存到本機
+local-saved = 已儲存到本機曲庫。
+local-already-saved = 此譜面已在本機曲庫中。

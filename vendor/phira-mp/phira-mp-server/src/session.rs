@@ -5,8 +5,8 @@ use crate::{
 };
 use anyhow::{Result, anyhow, bail};
 use phira_mp_common::{
-    ClientCommand, HEARTBEAT_DISCONNECT_TIMEOUT, JoinRoomResponse, Message, ServerCommand, Stream,
-    UserInfo, LocalChartChunk, LOCAL_CHART_CHUNK_BYTES, MAX_LOCAL_CHART_BYTES,
+    ClientCommand, HEARTBEAT_DISCONNECT_TIMEOUT, JoinRoomResponse, LOCAL_CHART_CHUNK_BYTES, LocalChartChunk, MAX_LOCAL_CHART_BYTES, Message,
+    ServerCommand, Stream, UserInfo,
 };
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -188,10 +188,7 @@ impl Session {
                                         let resp: Result<UserInfo> = async {
                                             Ok(reqwest::Client::new()
                                                 .get(format!("{HOST}/me"))
-                                                .header(
-                                                    reqwest::header::AUTHORIZATION,
-                                                    format!("Bearer {token}"),
-                                                )
+                                                .header(reqwest::header::AUTHORIZATION, format!("Bearer {token}"))
                                                 .send()
                                                 .await?
                                                 .error_for_status()?
@@ -212,22 +209,17 @@ impl Session {
                                             info!("reconnect");
                                             let _ = tx.send(Arc::clone(user));
                                             this_inited.notified().await;
-                                            user.set_session(Arc::downgrade(this.get().unwrap()))
-                                                .await;
+                                            user.set_session(Arc::downgrade(this.get().unwrap())).await;
                                         } else {
                                             let user = Arc::new(User::new(
                                                 resp.id,
                                                 resp.name,
-                                                resp.language
-                                                    .parse()
-                                                    .map(Language)
-                                                    .unwrap_or_default(),
+                                                resp.language.parse().map(Language).unwrap_or_default(),
                                                 Arc::clone(&server),
                                             ));
                                             let _ = tx.send(Arc::clone(&user));
                                             this_inited.notified().await;
-                                            user.set_session(Arc::downgrade(this.get().unwrap()))
-                                                .await;
+                                            user.set_session(Arc::downgrade(this.get().unwrap())).await;
                                             users_guard.insert(resp.id, user);
                                         }
                                         Ok(())
@@ -236,9 +228,7 @@ impl Session {
                                 .await;
                                 if let Err(err) = res {
                                     warn!("failed to authenticate: {err:?}");
-                                    let _ = send_tx
-                                        .send(ServerCommand::Authenticate(Err(err.to_string())))
-                                        .await;
+                                    let _ = send_tx.send(ServerCommand::Authenticate(Err(err.to_string()))).await;
                                     panicked.store(true, Ordering::SeqCst);
                                     if let Err(err) = server.lost_con_tx.send(id).await {
                                         error!("failed to mark lost connection ({id}): {err:?}");
@@ -249,12 +239,7 @@ impl Session {
                                         Some(room) => Some(room.client_state(user).await),
                                         None => None,
                                     };
-                                    let _ = send_tx
-                                        .send(ServerCommand::Authenticate(Ok((
-                                            user.to_info(),
-                                            room_state,
-                                        ))))
-                                        .await;
+                                    let _ = send_tx.send(ServerCommand::Authenticate(Ok((user.to_info(), room_state)))).await;
                                     waiting_for_authenticate.store(false, Ordering::SeqCst);
                                 }
                                 return;
@@ -264,9 +249,7 @@ impl Session {
                             }
                         }
                         let user = this.get().map(|it| Arc::clone(&it.user)).unwrap();
-                        if let Some(resp) = LANGUAGE
-                            .scope(Arc::new(user.lang.clone()), process(user, cmd))
-                            .await
+                        if let Some(resp) = LANGUAGE.scope(Arc::new(user.lang.clone()), process(user, cmd)).await
                             && let Err(err) = send_tx.send(resp).await
                         {
                             error!("failed to handle message, aborting connection {id}: {err:?}",);
@@ -340,6 +323,16 @@ async fn process(user: Arc<User>, cmd: ClientCommand) -> Option<ServerCommand> {
         result.map_err(|it| it.to_string())
     }
 
+    let cmd = match cmd {
+        ClientCommand::StartLocalUpload { name, size, sha256 } => ClientCommand::StartLocalUploadV2 {
+            name,
+            size,
+            sha256,
+            content_sha256: String::new(),
+        },
+        cmd => cmd,
+    };
+
     macro_rules! get_room {
         (~ $d:ident) => {
             let $d = match user.room.read().await.as_ref().map(Arc::clone) {
@@ -374,9 +367,7 @@ async fn process(user: Arc<User>, cmd: ClientCommand) -> Option<ServerCommand> {
     }
     match cmd {
         ClientCommand::Ping => unreachable!(),
-        ClientCommand::Authenticate { .. } => Some(ServerCommand::Authenticate(Err(
-            "repeated authenticate".to_owned(),
-        ))),
+        ClientCommand::Authenticate { .. } => Some(ServerCommand::Authenticate(Err("repeated authenticate".to_owned()))),
         ClientCommand::Chat { message } => {
             let res: Result<()> = async move {
                 get_room!(room);
@@ -394,11 +385,7 @@ async fn process(user: Arc<User>, cmd: ClientCommand) -> Option<ServerCommand> {
                     user.game_time.store(frame.time.to_bits(), Ordering::SeqCst);
                 }
                 tokio::spawn(async move {
-                    room.broadcast_monitors(ServerCommand::Touches {
-                        player: user.id,
-                        frames,
-                    })
-                    .await;
+                    room.broadcast_monitors(ServerCommand::Touches { player: user.id, frames }).await;
                 });
             } else {
                 warn!("received touch events in non-live mode");
@@ -410,11 +397,7 @@ async fn process(user: Arc<User>, cmd: ClientCommand) -> Option<ServerCommand> {
             if room.is_live() {
                 debug!("received {} judge events from {}", judges.len(), user.id);
                 tokio::spawn(async move {
-                    room.broadcast_monitors(ServerCommand::Judges {
-                        player: user.id,
-                        judges,
-                    })
-                    .await;
+                    room.broadcast_monitors(ServerCommand::Judges { player: user.id, judges }).await;
                 });
             } else {
                 warn!("received judge events in non-live mode");
@@ -455,9 +438,7 @@ async fn process(user: Arc<User>, cmd: ClientCommand) -> Option<ServerCommand> {
                     bail!("already in room");
                 }
                 let room = user.server.rooms.read().await.get(&id).map(Arc::clone);
-                let Some(room) = room else {
-                    bail!("room not found")
-                };
+                let Some(room) = room else { bail!("room not found") };
                 if room.locked.load(Ordering::SeqCst) {
                     bail!(tl!("join-room-locked"));
                 }
@@ -470,18 +451,12 @@ async fn process(user: Arc<User>, cmd: ClientCommand) -> Option<ServerCommand> {
                 if !room.add_user(Arc::downgrade(&user), monitor).await {
                     bail!(tl!("join-room-full"));
                 }
-                info!(
-                    user = user.id,
-                    room = id.to_string(),
-                    monitor,
-                    "user join room"
-                );
+                info!(user = user.id, room = id.to_string(), monitor, "user join room");
                 user.monitor.store(monitor, Ordering::SeqCst);
                 if monitor && !room.live.fetch_or(true, Ordering::SeqCst) {
                     info!(room = id.to_string(), "room goes live");
                 }
-                room.broadcast(ServerCommand::OnJoinRoom(user.to_info()))
-                    .await;
+                room.broadcast(ServerCommand::OnJoinRoom(user.to_info())).await;
                 room.send(Message::JoinRoom {
                     user: user.id,
                     name: user.name.clone(),
@@ -510,11 +485,7 @@ async fn process(user: Arc<User>, cmd: ClientCommand) -> Option<ServerCommand> {
                 // if !matches!(*room.state.read().await, InternalRoomState::SelectChart) {
                 // bail!("game ongoing, can't leave");
                 // }
-                info!(
-                    user = user.id,
-                    room = room.id.to_string(),
-                    "user leave room"
-                );
+                info!(user = user.id, room = room.id.to_string(), "user leave room");
                 if room.on_user_leave(&user).await {
                     user.server.rooms.write().await.remove(&room.id);
                 }
@@ -527,12 +498,7 @@ async fn process(user: Arc<User>, cmd: ClientCommand) -> Option<ServerCommand> {
             let res: Result<()> = async move {
                 get_room!(room);
                 room.check_host(&user).await?;
-                info!(
-                    user = user.id,
-                    room = room.id.to_string(),
-                    lock,
-                    "lock room"
-                );
+                info!(user = user.id, room = room.id.to_string(), lock, "lock room");
                 room.locked.store(lock, Ordering::SeqCst);
                 room.send(Message::LockRoom { lock }).await;
                 Ok(())
@@ -544,12 +510,7 @@ async fn process(user: Arc<User>, cmd: ClientCommand) -> Option<ServerCommand> {
             let res: Result<()> = async move {
                 get_room!(room);
                 room.check_host(&user).await?;
-                info!(
-                    user = user.id,
-                    room = room.id.to_string(),
-                    cycle,
-                    "cycle room"
-                );
+                info!(user = user.id, room = room.id.to_string(), cycle, "cycle room");
                 room.cycle.store(cycle, Ordering::SeqCst);
                 room.send(Message::CycleRoom { cycle }).await;
                 Ok(())
@@ -560,21 +521,14 @@ async fn process(user: Arc<User>, cmd: ClientCommand) -> Option<ServerCommand> {
         ClientCommand::SelectChart { id } => {
             let res: Result<()> = async move {
                 get_room!(room, InternalRoomState::SelectChart);
-                if id <= 0 { bail!("invalid public chart id"); }
+                if id <= 0 {
+                    bail!("invalid public chart id");
+                }
                 room.check_host(&user).await?;
-                let span = debug_span!(
-                    "select chart",
-                    user = user.id,
-                    room = room.id.to_string(),
-                    chart = id,
-                );
+                let span = debug_span!("select chart", user = user.id, room = room.id.to_string(), chart = id,);
                 async move {
                     trace!("fetch");
-                    let res: Chart = reqwest::get(format!("{HOST}/chart/{id}"))
-                        .await?
-                        .error_for_status()?
-                        .json()
-                        .await?;
+                    let res: Chart = reqwest::get(format!("{HOST}/chart/{id}")).await?.error_for_status()?.json().await?;
                     debug!("chart is {res:?}");
                     room.send(Message::SelectChart {
                         user: user.id,
@@ -657,19 +611,11 @@ async fn process(user: Arc<User>, cmd: ClientCommand) -> Option<ServerCommand> {
         ClientCommand::Played { id } => {
             let res: Result<()> = async move {
                 get_room!(room);
-                let res: Record = reqwest::get(format!("{HOST}/record/{id}"))
-                    .await?
-                    .error_for_status()?
-                    .json()
-                    .await?;
+                let res: Record = reqwest::get(format!("{HOST}/record/{id}")).await?.error_for_status()?.json().await?;
                 if res.player != user.id {
                     bail!("invalid record");
                 }
-                debug!(
-                    room = room.id.to_string(),
-                    user = user.id,
-                    "user played: {res:?}"
-                );
+                debug!(room = room.id.to_string(), user = user.id, "user played: {res:?}");
                 room.send(Message::Played {
                     user: user.id,
                     score: res.score,
@@ -712,25 +658,49 @@ async fn process(user: Arc<User>, cmd: ClientCommand) -> Option<ServerCommand> {
             }
             .await;
             Some(ServerCommand::Abort(err_to_str(res)))
-        },
-        ClientCommand::StartLocalUpload { name, size, sha256 } => {
+        }
+        ClientCommand::StartLocalUpload { .. } => unreachable!("normalized above"),
+        ClientCommand::StartLocalUploadV2 {
+            name,
+            size,
+            sha256,
+            content_sha256,
+        } => {
             let res: Result<()> = async move {
                 get_room!(room, InternalRoomState::SelectChart);
                 room.check_host(&user).await?;
-                if name.trim().is_empty() || name.len() > 128 { bail!("invalid local chart name"); }
-                if size == 0 || size as usize > MAX_LOCAL_CHART_BYTES { bail!("local chart ZIP exceeds 32 MiB"); }
-                if sha256.len() != 64 || !sha256.bytes().all(|c| c.is_ascii_hexdigit()) { bail!("invalid chart SHA-256"); }
+                if name.trim().is_empty() || name.len() > 128 {
+                    bail!("invalid local chart name");
+                }
+                if size == 0 || size as usize > MAX_LOCAL_CHART_BYTES {
+                    bail!("local chart ZIP exceeds 32 MiB");
+                }
+                if sha256.len() != 64 || !sha256.bytes().all(|c| c.is_ascii_hexdigit()) {
+                    bail!("invalid chart SHA-256");
+                }
+                if !content_sha256.is_empty() && (content_sha256.len() != 64 || !content_sha256.bytes().all(|c| c.is_ascii_hexdigit())) {
+                    bail!("invalid content SHA-256");
+                }
                 let mut upload = room.local_upload.lock().await;
-                *upload = Some(LocalChartUpload { name, size, sha256: sha256.to_ascii_lowercase(), bytes: Vec::with_capacity(size as usize) });
+                *upload = Some(LocalChartUpload {
+                    name,
+                    size,
+                    content_sha256: content_sha256.to_ascii_lowercase(),
+                    sha256: sha256.to_ascii_lowercase(),
+                    bytes: Vec::with_capacity(size as usize),
+                });
                 Ok(())
-            }.await;
+            }
+            .await;
             Some(ServerCommand::StartLocalUpload(err_to_str(res)))
         }
         ClientCommand::LocalUploadChunk { offset, data } => {
             let res: Result<()> = async move {
                 get_room!(room, InternalRoomState::SelectChart);
                 room.check_host(&user).await?;
-                if data.is_empty() || data.len() > LOCAL_CHART_CHUNK_BYTES { bail!("invalid local chart chunk"); }
+                if data.is_empty() || data.len() > LOCAL_CHART_CHUNK_BYTES {
+                    bail!("invalid local chart chunk");
+                }
                 let mut guard = room.local_upload.lock().await;
                 let upload = guard.as_mut().ok_or_else(|| anyhow!("no local chart upload in progress"))?;
                 if upload.bytes.len() != offset as usize || upload.bytes.len() + data.len() > upload.size as usize {
@@ -738,7 +708,8 @@ async fn process(user: Arc<User>, cmd: ClientCommand) -> Option<ServerCommand> {
                 }
                 upload.bytes.extend_from_slice(&data);
                 Ok(())
-            }.await;
+            }
+            .await;
             Some(ServerCommand::LocalUploadChunk(err_to_str(res)))
         }
         ClientCommand::FinishLocalUpload => {
@@ -746,51 +717,112 @@ async fn process(user: Arc<User>, cmd: ClientCommand) -> Option<ServerCommand> {
                 get_room!(room, InternalRoomState::SelectChart);
                 room.check_host(&user).await?;
                 let upload = room.local_upload.lock().await.take().ok_or_else(|| anyhow!("no local chart upload"))?;
-                if upload.bytes.len() != upload.size as usize { bail!("local chart upload incomplete"); }
-                if format!("{:x}", Sha256::digest(&upload.bytes)) != upload.sha256 { bail!("local chart checksum mismatch"); }
+                if upload.bytes.len() != upload.size as usize {
+                    bail!("local chart upload incomplete");
+                }
+                if format!("{:x}", Sha256::digest(&upload.bytes)) != upload.sha256 {
+                    bail!("local chart checksum mismatch");
+                }
                 let name = upload.name;
-                *room.local_chart.write().await = Some(LocalChartData { sha256: upload.sha256, bytes: Arc::new(upload.bytes) });
+                *room.local_chart.write().await = Some(LocalChartData {
+                    content_sha256: upload.content_sha256,
+                    sha256: upload.sha256,
+                    bytes: Arc::new(upload.bytes),
+                });
                 *room.chart.write().await = Some(Chart { id: -1, name: name.clone() });
                 room.send(Message::SelectLocalChart { user: user.id, name }).await;
                 room.on_state_change().await;
                 Ok(())
-            }.await;
+            }
+            .await;
             Some(ServerCommand::FinishLocalUpload(err_to_str(res)))
+        }
+        ClientCommand::GetLocalChartMetadata => {
+            let res: Result<phira_mp_common::LocalChartMetadata> = async move {
+                get_room!(room);
+                if !room.chart.read().await.as_ref().is_some_and(|c| c.id == -1) {
+                    bail!("room has no local chart selected");
+                }
+                let guard = room.local_chart.read().await;
+                let chart = guard.as_ref().ok_or_else(|| anyhow!("room has no private chart"))?;
+                Ok(phira_mp_common::LocalChartMetadata {
+                    archive_sha256: chart.sha256.clone(),
+                    content_sha256: chart.content_sha256.clone(),
+                    size: chart.bytes.len() as u32,
+                })
+            }
+            .await;
+            Some(ServerCommand::LocalChartMetadata(err_to_str(res)))
         }
         ClientCommand::FetchLocalChunk { offset } => {
             let res: Result<LocalChartChunk> = async move {
                 get_room!(room);
-                if !room.chart.read().await.as_ref().is_some_and(|c| c.id == -1) { bail!("room has no local chart selected"); }
+                if !room.chart.read().await.as_ref().is_some_and(|c| c.id == -1) {
+                    bail!("room has no local chart selected");
+                }
                 let guard = room.local_chart.read().await;
                 let chart = guard.as_ref().ok_or_else(|| anyhow!("room chart missing"))?;
                 let len = chart.bytes.len();
-                if offset as usize >= len { bail!("invalid local chart download offset"); }
+                if offset as usize >= len {
+                    bail!("invalid local chart download offset");
+                }
                 let end = (offset as usize + LOCAL_CHART_CHUNK_BYTES).min(len);
-                Ok(LocalChartChunk { offset, total_size: len as u32, sha256: chart.sha256.clone(), data: chart.bytes[offset as usize..end].to_vec() })
-            }.await;
+                Ok(LocalChartChunk {
+                    offset,
+                    total_size: len as u32,
+                    sha256: chart.sha256.clone(),
+                    data: chart.bytes[offset as usize..end].to_vec(),
+                })
+            }
+            .await;
             Some(ServerCommand::FetchLocalChunk(err_to_str(res)))
         }
         ClientCommand::PlayedLocal { score, accuracy, full_combo } => {
             let res: Result<()> = async move {
                 get_room!(room);
-                if !room.chart.read().await.as_ref().is_some_and(|c| c.id == -1) { bail!("not a local chart"); }
+                if !room.chart.read().await.as_ref().is_some_and(|c| c.id == -1) {
+                    bail!("not a local chart");
+                }
                 if !(0..=1_000_000).contains(&score) || !accuracy.is_finite() || !(0.0..=1.0).contains(&accuracy) {
                     bail!("invalid local score");
                 }
                 let mut guard = room.state.write().await;
                 if let InternalRoomState::Playing { results, aborted } = guard.deref_mut() {
-                    if aborted.contains(&user.id) || results.contains_key(&user.id) { bail!("already finished"); }
-                    results.insert(user.id, Record {
-                        id: -1, player: user.id, score,
-                        perfect: 0, good: 0, bad: 0, miss: 0, max_combo: 0,
-                        accuracy, full_combo, std: 0.0, std_score: 0.0,
-                    });
+                    if aborted.contains(&user.id) || results.contains_key(&user.id) {
+                        bail!("already finished");
+                    }
+                    results.insert(
+                        user.id,
+                        Record {
+                            id: -1,
+                            player: user.id,
+                            score,
+                            perfect: 0,
+                            good: 0,
+                            bad: 0,
+                            miss: 0,
+                            max_combo: 0,
+                            accuracy,
+                            full_combo,
+                            std: 0.0,
+                            std_score: 0.0,
+                        },
+                    );
                     drop(guard);
-                    room.send(Message::Played { user: user.id, score, accuracy, full_combo }).await;
+                    room.send(Message::Played {
+                        user: user.id,
+                        score,
+                        accuracy,
+                        full_combo,
+                    })
+                    .await;
                     room.check_all_ready().await;
-                } else { bail!("not currently playing"); }
+                } else {
+                    bail!("not currently playing");
+                }
                 Ok(())
-            }.await;
+            }
+            .await;
             Some(ServerCommand::PlayedLocal(err_to_str(res)))
         }
     }

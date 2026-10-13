@@ -3,20 +3,20 @@ pub mod resolver;
 use anyhow::{Context, Error, Result};
 use dashmap::DashMap;
 use phira_mp_common::{
-    ClientCommand, ClientRoomState, JoinRoomResponse, JudgeEvent, LocalChartChunk, Message, RoomId, RoomState, ServerCommand, Stream, TouchFrame,
-    UserInfo, HEARTBEAT_INTERVAL, HEARTBEAT_TIMEOUT, LOCAL_CHART_CHUNK_BYTES, MAX_LOCAL_CHART_BYTES,
+    ClientCommand, ClientRoomState, HEARTBEAT_INTERVAL, HEARTBEAT_TIMEOUT, JoinRoomResponse, JudgeEvent, LOCAL_CHART_CHUNK_BYTES, LocalChartChunk,
+    LocalChartMetadata, MAX_LOCAL_CHART_BYTES, Message, RoomId, RoomState, ServerCommand, Stream, TouchFrame, UserInfo,
 };
 use sha2::{Digest, Sha256};
 use std::{
     sync::{
-        atomic::{AtomicU8, Ordering},
         Arc,
+        atomic::{AtomicU8, Ordering},
     },
     time::{Duration, Instant},
 };
 use tokio::{
     net::TcpStream,
-    sync::{oneshot, Mutex, Notify, RwLock},
+    sync::{Mutex, Notify, RwLock, oneshot},
     task::JoinHandle,
     time,
 };
@@ -72,6 +72,7 @@ struct State {
     cb_finish_local_upload: RCallback<()>,
     cb_fetch_local_chunk: RCallback<LocalChartChunk>,
     cb_played_local: RCallback<()>,
+    cb_local_metadata: RCallback<LocalChartMetadata>,
 
     live_players: DashMap<i32, Arc<LivePlayer>>,
     messages: Mutex<Vec<Message>>,
@@ -121,6 +122,7 @@ impl Client {
             cb_finish_local_upload: Callback::default(),
             cb_fetch_local_chunk: Callback::default(),
             cb_played_local: Callback::default(),
+            cb_local_metadata: Callback::default(),
 
             live_players: DashMap::new(),
             messages: Mutex::default(),
@@ -331,18 +333,20 @@ impl Client {
 
     /// Upload a private chart ZIP to the current self-hosted multiplayer room.
     /// The server only accepts this from the room host while selecting charts.
-    pub async fn upload_local_chart(&self, name: String, bytes: Vec<u8>) -> Result<()> {
+    pub async fn upload_local_chart(&self, name: String, bytes: Vec<u8>, content_sha256: String) -> Result<()> {
         anyhow::ensure!(!bytes.is_empty() && bytes.len() <= MAX_LOCAL_CHART_BYTES, "local chart ZIP exceeds 32 MiB");
         let sha256 = format!("{:x}", Sha256::digest(&bytes));
         self.rcall(
-            ClientCommand::StartLocalUpload {
+            ClientCommand::StartLocalUploadV2 {
+                content_sha256,
                 name,
                 size: bytes.len() as u32,
                 sha256,
             },
             &self.state.cb_start_local_upload,
         )
-        .await?;
+        .await
+        .context("Private chart upload failed. Use the cache-enabled multiplayer server and reconnect.")?;
         for (index, data) in bytes.chunks(LOCAL_CHART_CHUNK_BYTES).enumerate() {
             let offset = index * LOCAL_CHART_CHUNK_BYTES;
             self.rcall(
@@ -355,6 +359,20 @@ impl Client {
             .await?;
         }
         self.rcall(ClientCommand::FinishLocalUpload, &self.state.cb_finish_local_upload).await
+    }
+
+    pub async fn local_chart_metadata(&self) -> Result<LocalChartMetadata> {
+        let info = self
+            .rcall(ClientCommand::GetLocalChartMetadata, &self.state.cb_local_metadata)
+            .await
+            .context("Private chart metadata failed. Update the multiplayer server to the cache-enabled branch and reconnect.")?;
+        anyhow::ensure!(info.size > 0 && info.size as usize <= MAX_LOCAL_CHART_BYTES, "invalid private chart size");
+        anyhow::ensure!(info.archive_sha256.len() == 64 && info.archive_sha256.bytes().all(|b| b.is_ascii_hexdigit()), "invalid archive hash");
+        anyhow::ensure!(
+            info.content_sha256.is_empty() || (info.content_sha256.len() == 64 && info.content_sha256.bytes().all(|b| b.is_ascii_hexdigit())),
+            "invalid content hash"
+        );
+        Ok(info)
     }
 
     /// Retrieve a host-provided chart from the room, with bounds and checksum verification.
@@ -447,7 +465,14 @@ impl Drop for Client {
 
 async fn process(state: Arc<State>, cmd: ServerCommand) {
     async fn cb<T>(cb: &Callback<T>, res: T) {
-        let _ = cb.lock().await.take().unwrap().send(res);
+        // A timed-out/cancelled call can still receive a late reply.
+        if let Some(sender) = cb.lock().await.take() {
+            if sender.send(res).is_err() {
+                warn!("discarding reply to a cancelled multiplayer request");
+            }
+        } else {
+            warn!("received multiplayer reply without a pending request");
+        }
     }
     match cmd {
         ServerCommand::Pong => {
@@ -535,5 +560,6 @@ async fn process(state: Arc<State>, cmd: ServerCommand) {
         ServerCommand::FinishLocalUpload(res) => cb(&state.cb_finish_local_upload, res).await,
         ServerCommand::FetchLocalChunk(res) => cb(&state.cb_fetch_local_chunk, res).await,
         ServerCommand::PlayedLocal(res) => cb(&state.cb_played_local, res).await,
+        ServerCommand::LocalChartMetadata(res) => cb(&state.cb_local_metadata, res).await,
     }
 }

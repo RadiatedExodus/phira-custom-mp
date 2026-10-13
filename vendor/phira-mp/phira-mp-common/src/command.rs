@@ -1,5 +1,5 @@
 use crate::{BinaryData, BinaryReader, BinaryWriter};
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use half::f16;
 use phira_mp_macros::BinaryData;
 use std::{collections::HashMap, fmt::Display, sync::Arc};
@@ -79,7 +79,7 @@ impl<const N: usize> BinaryData for Varchar<N> {
 pub struct RoomId(Varchar<20>);
 impl RoomId {
     fn validate(self) -> Result<Self> {
-        if self.0 .0.is_empty() || !self.0 .0.chars().all(|it| it == '-' || it == '_' || it.is_ascii_alphanumeric()) {
+        if self.0.0.is_empty() || !self.0.0.chars().all(|it| it == '-' || it == '_' || it.is_ascii_alphanumeric()) {
             bail!("invalid room id");
         }
         Ok(self)
@@ -88,7 +88,7 @@ impl RoomId {
 
 impl From<RoomId> for String {
     fn from(value: RoomId) -> Self {
-        value.0 .0
+        value.0.0
     }
 }
 
@@ -102,7 +102,7 @@ impl TryFrom<String> for RoomId {
 
 impl Display for RoomId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.0 .0.fmt(f)
+        self.0.0.fmt(f)
     }
 }
 
@@ -156,35 +156,84 @@ pub struct LocalChartChunk {
     pub data: Vec<u8>,
 }
 
+/// Hash-first lookup. Content hash is advertised by the host and verified locally.
+#[derive(Debug, Clone, BinaryData)]
+pub struct LocalChartMetadata {
+    pub archive_sha256: String,
+    pub content_sha256: String,
+    pub size: u32,
+}
+
 #[derive(Debug, BinaryData)]
 pub enum ClientCommand {
     Ping,
 
-    Authenticate { token: Varchar<32> },
-    Chat { message: Varchar<200> },
+    Authenticate {
+        token: Varchar<32>,
+    },
+    Chat {
+        message: Varchar<200>,
+    },
 
-    Touches { frames: Arc<Vec<TouchFrame>> },
-    Judges { judges: Arc<Vec<JudgeEvent>> },
+    Touches {
+        frames: Arc<Vec<TouchFrame>>,
+    },
+    Judges {
+        judges: Arc<Vec<JudgeEvent>>,
+    },
 
-    CreateRoom { id: RoomId },
-    JoinRoom { id: RoomId, monitor: bool },
+    CreateRoom {
+        id: RoomId,
+    },
+    JoinRoom {
+        id: RoomId,
+        monitor: bool,
+    },
     LeaveRoom,
-    LockRoom { lock: bool },
-    CycleRoom { cycle: bool },
+    LockRoom {
+        lock: bool,
+    },
+    CycleRoom {
+        cycle: bool,
+    },
 
-    SelectChart { id: i32 },
+    SelectChart {
+        id: i32,
+    },
     RequestStart,
     Ready,
     CancelReady,
-    Played { id: i32 },
+    Played {
+        id: i32,
+    },
     Abort,
 
     // Appended to preserve the existing official-chart command numbers.
-    StartLocalUpload { name: String, size: u32, sha256: String },
-    LocalUploadChunk { offset: u32, data: Vec<u8> },
+    StartLocalUpload {
+        name: String,
+        size: u32,
+        sha256: String,
+    },
+    LocalUploadChunk {
+        offset: u32,
+        data: Vec<u8>,
+    },
     FinishLocalUpload,
-    FetchLocalChunk { offset: u32 },
-    PlayedLocal { score: i32, accuracy: f32, full_combo: bool },
+    FetchLocalChunk {
+        offset: u32,
+    },
+    PlayedLocal {
+        score: i32,
+        accuracy: f32,
+        full_combo: bool,
+    },
+    StartLocalUploadV2 {
+        name: String,
+        size: u32,
+        sha256: String,
+        content_sha256: String,
+    },
+    GetLocalChartMetadata,
 }
 
 #[derive(Clone, Debug, BinaryData)]
@@ -319,4 +368,5 @@ pub enum ServerCommand {
     FinishLocalUpload(SResult<()>),
     FetchLocalChunk(SResult<LocalChartChunk>),
     PlayedLocal(SResult<()>),
+    LocalChartMetadata(SResult<LocalChartMetadata>),
 }

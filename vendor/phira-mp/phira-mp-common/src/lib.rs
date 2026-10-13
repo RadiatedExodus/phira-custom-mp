@@ -4,7 +4,7 @@ pub use bin::*;
 mod command;
 pub use command::*;
 
-use anyhow::{bail, Error, Result};
+use anyhow::{Error, Result, bail};
 use std::{future::Future, marker::PhantomData, sync::Arc, time::Duration};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -218,6 +218,87 @@ mod local_chart_protocol_tests {
                 assert_eq!(chunk.sha256.len(), 64);
             }
             _ => panic!("wrong server response"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod cache_protocol_tests {
+    use super::*;
+
+    #[test]
+    fn old_command_numbers_remain_unchanged() {
+        for (command, tag) in [
+            (ClientCommand::Ping, 0),
+            (ClientCommand::SelectChart { id: 123 }, 10),
+            (
+                ClientCommand::StartLocalUpload {
+                    name: "test".into(),
+                    size: 1,
+                    sha256: "a".repeat(64),
+                },
+                16,
+            ),
+            (
+                ClientCommand::PlayedLocal {
+                    score: 0,
+                    accuracy: 0.,
+                    full_combo: false,
+                },
+                20,
+            ),
+            (ClientCommand::GetLocalChartMetadata, 22),
+        ] {
+            let mut bytes = Vec::new();
+            encode_packet(&command, &mut bytes);
+            assert_eq!(bytes[0], tag);
+        }
+    }
+
+    #[test]
+    fn metadata_and_versioned_upload_roundtrip() {
+        let mut bytes = Vec::new();
+        encode_packet(
+            &ClientCommand::StartLocalUploadV2 {
+                name: "test".into(),
+                size: 23,
+                sha256: "a".repeat(64),
+                content_sha256: "b".repeat(64),
+            },
+            &mut bytes,
+        );
+        assert_eq!(bytes[0], 21);
+        match decode_packet::<ClientCommand>(&bytes).unwrap() {
+            ClientCommand::StartLocalUploadV2 {
+                name,
+                size,
+                sha256,
+                content_sha256,
+            } => {
+                assert_eq!(name, "test");
+                assert_eq!(size, 23);
+                assert_eq!(sha256, "a".repeat(64));
+                assert_eq!(content_sha256, "b".repeat(64));
+            }
+            _ => panic!("wrong upload variant"),
+        }
+        bytes.clear();
+        encode_packet(
+            &ServerCommand::LocalChartMetadata(Ok(LocalChartMetadata {
+                archive_sha256: "a".repeat(64),
+                content_sha256: "b".repeat(64),
+                size: 23,
+            })),
+            &mut bytes,
+        );
+        assert_eq!(bytes[0], 25);
+        match decode_packet::<ServerCommand>(&bytes).unwrap() {
+            ServerCommand::LocalChartMetadata(Ok(metadata)) => {
+                assert_eq!(metadata.archive_sha256, "a".repeat(64));
+                assert_eq!(metadata.content_sha256, "b".repeat(64));
+                assert_eq!(metadata.size, 23);
+            }
+            _ => panic!("wrong metadata variant"),
         }
     }
 }
