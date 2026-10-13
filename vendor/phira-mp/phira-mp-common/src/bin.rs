@@ -1,6 +1,6 @@
 use std::{collections::HashMap, hash::Hash};
 
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use byteorder::{ByteOrder, LittleEndian as LE};
 use chrono::{DateTime, TimeZone, Utc};
 use tap::TapFallible;
@@ -230,11 +230,7 @@ impl<A: BinaryData, B: BinaryData> BinaryData for (A, B) {
 
 impl<T: BinaryData> BinaryData for Option<T> {
     fn read_binary(r: &mut BinaryReader<'_>) -> Result<Self> {
-        Ok(if r.read::<bool>()? {
-            Some(r.read()?)
-        } else {
-            None
-        })
+        Ok(if r.read::<bool>()? { Some(r.read()?) } else { None })
     }
 
     fn write_binary(&self, w: &mut BinaryWriter<'_>) -> Result<()> {
@@ -253,11 +249,7 @@ impl<T: BinaryData> BinaryData for Option<T> {
 
 impl<A: BinaryData, B: BinaryData> BinaryData for Result<A, B> {
     fn read_binary(r: &mut BinaryReader<'_>) -> Result<Self> {
-        Ok(if r.read::<bool>()? {
-            Ok(r.read()?)
-        } else {
-            Err(r.read()?)
-        })
+        Ok(if r.read::<bool>()? { Ok(r.read()?) } else { Err(r.read()?) })
     }
 
     fn write_binary(&self, w: &mut BinaryWriter<'_>) -> Result<()> {

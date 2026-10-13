@@ -1,9 +1,6 @@
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
-use syn::{
-    Data, DataEnum, DataStruct, DeriveInput, Fields, GenericArgument, PathArguments, Type, Variant,
-    parse_macro_input,
-};
+use syn::{parse_macro_input, Data, DataEnum, DataStruct, DeriveInput, Fields, GenericArgument, PathArguments, Type, Variant};
 
 #[proc_macro_derive(BinaryData)]
 pub fn derive_model_ex(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
@@ -67,18 +64,13 @@ fn parse_type(typ: &Type) -> TypeInfo {
 fn build_derive(name: Ident, data: Data) -> TokenStream {
     match data {
         Data::Struct(DataStruct { fields, .. }) => build_derive_struct(name, fields),
-        Data::Enum(DataEnum { variants, .. }) => {
-            build_derive_enum(name, variants.into_iter().collect())
-        }
+        Data::Enum(DataEnum { variants, .. }) => build_derive_enum(name, variants.into_iter().collect()),
         _ => panic!(),
     }
 }
 
 fn build_derive_struct(name: Ident, fields: Fields) -> TokenStream {
-    let fields: Vec<_> = fields
-        .iter()
-        .map(|it| (it.ident.clone(), parse_type(&it.ty)))
-        .collect();
+    let fields: Vec<_> = fields.iter().map(|it| (it.ident.clone(), parse_type(&it.ty))).collect();
     let read = struct_read(&fields);
     let write = struct_write(&fields, true);
     quote! {
@@ -105,30 +97,16 @@ fn build_derive_enum(name: Ident, variants: Vec<Variant>) -> TokenStream {
             match &it.fields {
                 Fields::Unit => quote! { #i => Self::#name },
                 Fields::Unnamed(fields) => {
-                    let fields = struct_read(
-                        &fields
-                            .unnamed
-                            .iter()
-                            .map(|it| (None, parse_type(&it.ty)))
-                            .collect::<Vec<_>>(),
-                    );
+                    let fields = struct_read(&fields.unnamed.iter().map(|it| (None, parse_type(&it.ty))).collect::<Vec<_>>());
                     quote! { #i => Self::#name(#fields) }
                 }
                 Fields::Named(fields) => {
-                    let fields = struct_read(
-                        &fields
-                            .named
-                            .iter()
-                            .map(|it| (it.ident.clone(), parse_type(&it.ty)))
-                            .collect::<Vec<_>>(),
-                    );
+                    let fields = struct_read(&fields.named.iter().map(|it| (it.ident.clone(), parse_type(&it.ty))).collect::<Vec<_>>());
                     quote! { #i => Self::#name { #fields } }
                 }
             }
         })
-        .chain(std::iter::once(
-            quote! { x => anyhow::bail!("invalid enum: {}", x) },
-        ));
+        .chain(std::iter::once(quote! { x => anyhow::bail!("invalid enum: {}", x) }));
     let write_arms = variants.iter().enumerate().map(|(i, it)| {
         let i = i as u8;
         let name = &it.ident;
@@ -141,14 +119,7 @@ fn build_derive_enum(name: Ident, variants: Vec<Variant>) -> TokenStream {
                         quote! { #ident }
                     })
                     .collect();
-                let writes = struct_write(
-                    &fields
-                        .unnamed
-                        .iter()
-                        .map(|it| (None, parse_type(&it.ty)))
-                        .collect::<Vec<_>>(),
-                    false,
-                );
+                let writes = struct_write(&fields.unnamed.iter().map(|it| (None, parse_type(&it.ty))).collect::<Vec<_>>(), false);
                 quote! { Self::#name(#(#names,)*) => { w.write_val(#i)?; #writes } }
             }
             Fields::Named(fields) => {
@@ -160,14 +131,7 @@ fn build_derive_enum(name: Ident, variants: Vec<Variant>) -> TokenStream {
                         quote! { #ident }
                     })
                     .collect();
-                let writes = struct_write(
-                    &fields
-                        .named
-                        .iter()
-                        .map(|it| (it.ident.clone(), parse_type(&it.ty)))
-                        .collect::<Vec<_>>(),
-                    false,
-                );
+                let writes = struct_write(&fields.named.iter().map(|it| (it.ident.clone(), parse_type(&it.ty))).collect::<Vec<_>>(), false);
                 quote! { Self::#name { #(#names,)* } => { w.write_val(#i)?; #writes } }
             }
         }
@@ -223,9 +187,7 @@ fn struct_write(fields: &[(Option<Ident>, TypeInfo)], use_self: bool) -> TokenSt
                         quote! { &self.#i }
                     }
                 } else {
-                    let name = name
-                        .clone()
-                        .unwrap_or(Ident::new(&format!("_{i}"), Span::call_site()));
+                    let name = name.clone().unwrap_or(Ident::new(&format!("_{i}"), Span::call_site()));
                     quote! { #name }
                 },
                 typ,

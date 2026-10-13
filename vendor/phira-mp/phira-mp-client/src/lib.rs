@@ -3,21 +3,20 @@ pub mod resolver;
 use anyhow::{Context, Error, Result};
 use dashmap::DashMap;
 use phira_mp_common::{
-    ClientCommand, ClientRoomState, HEARTBEAT_INTERVAL, HEARTBEAT_TIMEOUT, JoinRoomResponse,
-    JudgeEvent, LocalChartChunk, Message, RoomId, RoomState, ServerCommand, Stream, TouchFrame, UserInfo,
-    LOCAL_CHART_CHUNK_BYTES, MAX_LOCAL_CHART_BYTES,
+    ClientCommand, ClientRoomState, JoinRoomResponse, JudgeEvent, LocalChartChunk, Message, RoomId, RoomState, ServerCommand, Stream, TouchFrame,
+    UserInfo, HEARTBEAT_INTERVAL, HEARTBEAT_TIMEOUT, LOCAL_CHART_CHUNK_BYTES, MAX_LOCAL_CHART_BYTES,
 };
 use sha2::{Digest, Sha256};
 use std::{
     sync::{
-        Arc,
         atomic::{AtomicU8, Ordering},
+        Arc,
     },
     time::{Duration, Instant},
 };
 use tokio::{
     net::TcpStream,
-    sync::{Mutex, Notify, RwLock, oneshot},
+    sync::{oneshot, Mutex, Notify, RwLock},
     task::JoinHandle,
     time,
 };
@@ -80,12 +79,7 @@ struct State {
 
 impl State {
     pub fn live_player(&self, player: i32) -> Arc<LivePlayer> {
-        Arc::clone(
-            &self
-                .live_players
-                .entry(player)
-                .or_insert_with(|| Arc::new(LivePlayer::new())),
-        )
+        Arc::clone(&self.live_players.entry(player).or_insert_with(|| Arc::new(LivePlayer::new())))
     }
 }
 
@@ -155,10 +149,7 @@ impl Client {
                     let start = Instant::now();
                     if let Err(err) = stream.send(ClientCommand::Ping).await {
                         error!("failed to send heartbeat: {err:?}");
-                    } else if time::timeout(HEARTBEAT_TIMEOUT, state.ping_notify.notified())
-                        .await
-                        .is_err()
-                    {
+                    } else if time::timeout(HEARTBEAT_TIMEOUT, state.ping_notify.notified()).await.is_err() {
                         warn!("heartbeat timeout");
                         ping_fail_count.fetch_add(1, Ordering::Relaxed);
                     } else {
@@ -213,11 +204,7 @@ impl Client {
     }
 
     pub fn blocking_room_id(&self) -> Option<RoomId> {
-        self.state
-            .room
-            .blocking_read()
-            .as_ref()
-            .map(|it| it.id.clone())
+        self.state.room.blocking_read().as_ref().map(|it| it.id.clone())
     }
 
     pub fn blocking_room_state(&self) -> Option<RoomState> {
@@ -229,19 +216,11 @@ impl Client {
     }
 
     pub fn blocking_is_host(&self) -> Option<bool> {
-        self.state
-            .room
-            .blocking_read()
-            .as_ref()
-            .map(|it| it.is_host)
+        self.state.room.blocking_read().as_ref().map(|it| it.is_host)
     }
 
     pub fn blocking_is_ready(&self) -> Option<bool> {
-        self.state
-            .room
-            .blocking_read()
-            .as_ref()
-            .map(|it| it.is_ready)
+        self.state.room.blocking_read().as_ref().map(|it| it.is_ready)
     }
 
     pub async fn ping(&self) -> Result<Duration> {
@@ -263,10 +242,7 @@ impl Client {
         let (tx, rx) = oneshot::channel();
         *cb.lock().await = Some(tx);
         self.stream.send(payload).await?;
-        time::timeout(TIMEOUT, rx)
-            .await
-            .context("timeout")??
-            .map_err(Error::msg)
+        time::timeout(TIMEOUT, rx).await.context("timeout")??.map_err(Error::msg)
     }
 
     #[inline]
@@ -297,11 +273,8 @@ impl Client {
 
     #[inline]
     pub async fn create_room(&self, id: RoomId) -> Result<()> {
-        self.rcall(
-            ClientCommand::CreateRoom { id: id.clone() },
-            &self.state.cb_create_room,
-        )
-        .await?;
+        self.rcall(ClientCommand::CreateRoom { id: id.clone() }, &self.state.cb_create_room)
+            .await?;
         let me = self.state.me.read().await.clone().unwrap();
         *self.state.room.write().await = Some(ClientRoomState {
             id,
@@ -319,13 +292,7 @@ impl Client {
     #[inline]
     pub async fn join_room(&self, id: RoomId, monitor: bool) -> Result<()> {
         let resp = self
-            .rcall(
-                ClientCommand::JoinRoom {
-                    id: id.clone(),
-                    monitor,
-                },
-                &self.state.cb_join_room,
-            )
+            .rcall(ClientCommand::JoinRoom { id: id.clone(), monitor }, &self.state.cb_join_room)
             .await?;
         *self.state.room.write().await = Some(ClientRoomState {
             id,
@@ -342,34 +309,24 @@ impl Client {
 
     #[inline]
     pub async fn leave_room(&self) -> Result<()> {
-        self.rcall(ClientCommand::LeaveRoom, &self.state.cb_leave_room)
-            .await?;
+        self.rcall(ClientCommand::LeaveRoom, &self.state.cb_leave_room).await?;
         *self.state.room.write().await = None;
         Ok(())
     }
 
     #[inline]
     pub async fn lock_room(&self, lock: bool) -> Result<()> {
-        self.rcall(ClientCommand::LockRoom { lock }, &self.state.cb_lock_room)
-            .await
+        self.rcall(ClientCommand::LockRoom { lock }, &self.state.cb_lock_room).await
     }
 
     #[inline]
     pub async fn cycle_room(&self, cycle: bool) -> Result<()> {
-        self.rcall(
-            ClientCommand::CycleRoom { cycle },
-            &self.state.cb_cycle_room,
-        )
-        .await
+        self.rcall(ClientCommand::CycleRoom { cycle }, &self.state.cb_cycle_room).await
     }
 
     #[inline]
     pub async fn select_chart(&self, id: i32) -> Result<()> {
-        self.rcall(
-            ClientCommand::SelectChart { id },
-            &self.state.cb_select_chart,
-        )
-        .await
+        self.rcall(ClientCommand::SelectChart { id }, &self.state.cb_select_chart).await
     }
 
     /// Upload a private chart ZIP to the current self-hosted multiplayer room.
@@ -377,10 +334,25 @@ impl Client {
     pub async fn upload_local_chart(&self, name: String, bytes: Vec<u8>) -> Result<()> {
         anyhow::ensure!(!bytes.is_empty() && bytes.len() <= MAX_LOCAL_CHART_BYTES, "local chart ZIP exceeds 32 MiB");
         let sha256 = format!("{:x}", Sha256::digest(&bytes));
-        self.rcall(ClientCommand::StartLocalUpload { name, size: bytes.len() as u32, sha256 }, &self.state.cb_start_local_upload).await?;
+        self.rcall(
+            ClientCommand::StartLocalUpload {
+                name,
+                size: bytes.len() as u32,
+                sha256,
+            },
+            &self.state.cb_start_local_upload,
+        )
+        .await?;
         for (index, data) in bytes.chunks(LOCAL_CHART_CHUNK_BYTES).enumerate() {
             let offset = index * LOCAL_CHART_CHUNK_BYTES;
-            self.rcall(ClientCommand::LocalUploadChunk { offset: offset as u32, data: data.to_vec() }, &self.state.cb_local_upload_chunk).await?;
+            self.rcall(
+                ClientCommand::LocalUploadChunk {
+                    offset: offset as u32,
+                    data: data.to_vec(),
+                },
+                &self.state.cb_local_upload_chunk,
+            )
+            .await?;
         }
         self.rcall(ClientCommand::FinishLocalUpload, &self.state.cb_finish_local_upload).await
     }
@@ -392,7 +364,9 @@ impl Client {
         let mut total_size: Option<u32> = None;
         loop {
             let offset = bytes.len() as u32;
-            let part = self.rcall(ClientCommand::FetchLocalChunk { offset }, &self.state.cb_fetch_local_chunk).await?;
+            let part = self
+                .rcall(ClientCommand::FetchLocalChunk { offset }, &self.state.cb_fetch_local_chunk)
+                .await?;
             anyhow::ensure!(part.offset == offset, "invalid local chart chunk offset");
             anyhow::ensure!(part.total_size > 0 && part.total_size as usize <= MAX_LOCAL_CHART_BYTES, "invalid local chart size");
             anyhow::ensure!(!part.data.is_empty() && part.data.len() <= LOCAL_CHART_CHUNK_BYTES, "invalid local chart chunk");
@@ -402,7 +376,9 @@ impl Client {
             expected_hash = Some(part.sha256);
             bytes.extend_from_slice(&part.data);
             anyhow::ensure!(bytes.len() <= part.total_size as usize, "local chart exceeds declared size");
-            if bytes.len() == part.total_size as usize { break; }
+            if bytes.len() == part.total_size as usize {
+                break;
+            }
         }
         let digest = format!("{:x}", Sha256::digest(&bytes));
         anyhow::ensure!(expected_hash.as_deref() == Some(digest.as_str()), "local chart SHA-256 mismatch");
@@ -410,37 +386,34 @@ impl Client {
     }
 
     pub async fn played_local(&self, score: i32, accuracy: f32, full_combo: bool) -> Result<()> {
-        self.rcall(ClientCommand::PlayedLocal { score, accuracy, full_combo }, &self.state.cb_played_local).await
+        self.rcall(ClientCommand::PlayedLocal { score, accuracy, full_combo }, &self.state.cb_played_local)
+            .await
     }
 
     #[inline]
     pub async fn request_start(&self) -> Result<()> {
-        self.rcall(ClientCommand::RequestStart, &self.state.cb_request_start)
-            .await?;
+        self.rcall(ClientCommand::RequestStart, &self.state.cb_request_start).await?;
         self.state.room.write().await.as_mut().unwrap().is_ready = true;
         Ok(())
     }
 
     #[inline]
     pub async fn ready(&self) -> Result<()> {
-        self.rcall(ClientCommand::Ready, &self.state.cb_ready)
-            .await?;
+        self.rcall(ClientCommand::Ready, &self.state.cb_ready).await?;
         self.state.room.write().await.as_mut().unwrap().is_ready = true;
         Ok(())
     }
 
     #[inline]
     pub async fn cancel_ready(&self) -> Result<()> {
-        self.rcall(ClientCommand::CancelReady, &self.state.cb_cancel_ready)
-            .await?;
+        self.rcall(ClientCommand::CancelReady, &self.state.cb_cancel_ready).await?;
         self.state.room.write().await.as_mut().unwrap().is_ready = false;
         Ok(())
     }
 
     #[inline]
     pub async fn played(&self, id: i32) -> Result<()> {
-        self.rcall(ClientCommand::Played { id }, &self.state.cb_played)
-            .await
+        self.rcall(ClientCommand::Played { id }, &self.state.cb_played).await
     }
 
     #[inline]
@@ -487,20 +460,10 @@ async fn process(state: Arc<State>, cmd: ServerCommand) {
             cb(&state.cb_chat, res).await;
         }
         ServerCommand::Touches { player, frames } => {
-            state
-                .live_player(player)
-                .touch_frames
-                .lock()
-                .await
-                .extend(frames.iter().cloned());
+            state.live_player(player).touch_frames.lock().await.extend(frames.iter().cloned());
         }
         ServerCommand::Judges { player, judges } => {
-            state
-                .live_player(player)
-                .judge_events
-                .lock()
-                .await
-                .extend(judges.iter().cloned());
+            state.live_player(player).judge_events.lock().await.extend(judges.iter().cloned());
         }
         ServerCommand::Message(msg) => {
             match msg {
@@ -511,14 +474,7 @@ async fn process(state: Arc<State>, cmd: ServerCommand) {
                     state.room.write().await.as_mut().unwrap().cycle = cycle;
                 }
                 Message::LeaveRoom { user, .. } => {
-                    state
-                        .room
-                        .write()
-                        .await
-                        .as_mut()
-                        .unwrap()
-                        .users
-                        .remove(&user);
+                    state.room.write().await.as_mut().unwrap().users.remove(&user);
                 }
                 _ => {}
             }

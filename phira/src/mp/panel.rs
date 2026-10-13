@@ -37,15 +37,25 @@ fn install_room_chart(bytes: Vec<u8>, digest: String) -> Result<String> {
     fs::create_dir_all(&root)?;
     let target = root.join(&digest);
     let local_path = format!("mp-local/{digest}");
-    if target.exists() { return Ok(local_path); }
+    if target.exists() {
+        return Ok(local_path);
+    }
     let mut zip = zip::ZipArchive::new(Cursor::new(&bytes))?;
-    if zip.len() > 4096 { bail!("local chart archive has too many files"); }
+    if zip.len() > 4096 {
+        bail!("local chart archive has too many files");
+    }
     let mut extracted = 0u64;
     for i in 0..zip.len() {
         let file = zip.by_index(i)?;
-        if file.enclosed_name().is_none() { bail!("unsafe path in local chart archive"); }
-        extracted = extracted.checked_add(file.size()).ok_or_else(|| anyhow!("local chart archive too large"))?;
-        if extracted > 128 * 1024 * 1024 { bail!("local chart archive expands beyond 128 MiB"); }
+        if file.enclosed_name().is_none() {
+            bail!("unsafe path in local chart archive");
+        }
+        extracted = extracted
+            .checked_add(file.size())
+            .ok_or_else(|| anyhow!("local chart archive too large"))?;
+        if extracted > 128 * 1024 * 1024 {
+            bail!("local chart archive expands beyond 128 MiB");
+        }
     }
     drop(zip);
     let tmp = root.join(format!(".partial-{}", Uuid::new_v4()));
@@ -54,11 +64,15 @@ fn install_room_chart(bytes: Vec<u8>, digest: String) -> Result<String> {
         let target_dir = prpr::dir::Dir::new(&tmp)?;
         prpr::ext::unzip_into(Cursor::new(bytes), &target_dir, true)?;
         let _: ChartInfo = serde_yaml::from_reader(File::open(tmp.join("info.yml"))?)?;
-        if target.exists() { return Ok(()); }
+        if target.exists() {
+            return Ok(());
+        }
         fs::rename(&tmp, &target)?;
         Ok(())
     })();
-    if result.is_err() || tmp.exists() { let _ = fs::remove_dir_all(&tmp); }
+    if result.is_err() || tmp.exists() {
+        let _ = fs::remove_dir_all(&tmp);
+    }
     result?;
     Ok(local_path)
 }
@@ -275,7 +289,9 @@ impl MPPanel {
         self.local_path = None;
         self.task = Some(Task::new(async move {
             let source = Path::new(&dir::charts()?).join(path);
-            if !source.is_dir() { bail!("local chart folder was not found"); }
+            if !source.is_dir() {
+                bail!("local chart folder was not found");
+            }
             let mut zip = Cursor::new(Vec::new());
             compress_folder(&source, &mut zip)?;
             client.upload_local_chart(name, zip.into_inner()).await?;
@@ -724,9 +740,7 @@ impl MPPanel {
             let client = self.clone_client();
             if self.chart_id == Some(-1) {
                 if let Some(record) = LOCAL_MP_RESULT.lock().unwrap().take() {
-                    self.task = Some(Task::new(async move {
-                        client.played_local(record.score, record.accuracy, record.full_combo).await
-                    }));
+                    self.task = Some(Task::new(async move { client.played_local(record.score, record.accuracy, record.full_combo).await }));
                 } else {
                     self.task = Some(Task::new(async move { client.abort().await }));
                 }

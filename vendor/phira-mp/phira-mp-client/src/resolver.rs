@@ -1,8 +1,8 @@
-use anyhow::{Result, bail};
+use anyhow::{bail, Result};
 use hickory_resolver::{
-    TokioResolver,
     config::{ResolverConfig, ResolverOpts},
     name_server::TokioConnectionProvider,
+    TokioResolver,
 };
 use http::uri::Authority;
 use std::net::IpAddr;
@@ -12,12 +12,9 @@ const SRV_PREFIX: &str = "_phira._tcp.";
 
 /// Global DNS resolver reused across all lookups.
 static RESOLVER: LazyLock<TokioResolver> = LazyLock::new(|| {
-    TokioResolver::builder_with_config(
-        ResolverConfig::default(),
-        TokioConnectionProvider::default(),
-    )
-    .with_options(ResolverOpts::default())
-    .build()
+    TokioResolver::builder_with_config(ResolverConfig::default(), TokioConnectionProvider::default())
+        .with_options(ResolverOpts::default())
+        .build()
 });
 
 /// Resolves an [`Authority`] into a (host, port) pair for `TcpStream::connect`.
@@ -42,10 +39,7 @@ async fn resolve_srv(host: &str) -> Result<(String, u16)> {
         .await
         .map_err(|e| anyhow::anyhow!("SRV lookup failed: {}", e))?;
 
-    let srv = lookup
-        .iter()
-        .next()
-        .ok_or_else(|| anyhow::anyhow!("No SRV records found"))?;
+    let srv = lookup.iter().next().ok_or_else(|| anyhow::anyhow!("No SRV records found"))?;
 
     let target = srv.target().to_string().trim_end_matches('.').to_string();
     let port = srv.port();
