@@ -18,7 +18,8 @@ installation because the certificate differs. Back up/export local charts and
 settings before uninstalling an existing copy, or test in a separate Android
 user/profile. Each workflow run creates a new test key, so updates between runs
 also require reinstalling. ARM64 Android devices only; the native build targets
-Android 8/API 26 or later (the shell may set an additional minimum).
+Android 8/API 26 or later; the manifest minimum is set to API 26. The packaged
+C++ runtime comes from the same NDK as the native build.
 
 All players must use the modified client and a server built from this branch's
 `vendor/phira-mp`. Follow `docs/multiplayer-host-local-charts.md`. Login and
