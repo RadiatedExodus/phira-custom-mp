@@ -4,8 +4,10 @@ use anyhow::{Context, Error, Result};
 use dashmap::DashMap;
 use phira_mp_common::{
     ClientCommand, ClientRoomState, HEARTBEAT_INTERVAL, HEARTBEAT_TIMEOUT, JoinRoomResponse,
-    JudgeEvent, Message, RoomId, RoomState, ServerCommand, Stream, TouchFrame, UserInfo,
+    JudgeEvent, LocalChartChunk, Message, RoomId, RoomState, ServerCommand, Stream, TouchFrame, UserInfo,
+    LOCAL_CHART_CHUNK_BYTES, MAX_LOCAL_CHART_BYTES,
 };
+use sha2::{Digest, Sha256};
 use std::{
     sync::{
         Arc,
@@ -66,6 +68,11 @@ struct State {
     cb_cancel_ready: RCallback<()>,
     cb_played: RCallback<()>,
     cb_abort: RCallback<()>,
+    cb_start_local_upload: RCallback<()>,
+    cb_local_upload_chunk: RCallback<()>,
+    cb_finish_local_upload: RCallback<()>,
+    cb_fetch_local_chunk: RCallback<LocalChartChunk>,
+    cb_played_local: RCallback<()>,
 
     live_players: DashMap<i32, Arc<LivePlayer>>,
     messages: Mutex<Vec<Message>>,
@@ -115,6 +122,11 @@ impl Client {
             cb_cancel_ready: Callback::default(),
             cb_played: Callback::default(),
             cb_abort: Callback::default(),
+            cb_start_local_upload: Callback::default(),
+            cb_local_upload_chunk: Callback::default(),
+            cb_finish_local_upload: Callback::default(),
+            cb_fetch_local_chunk: Callback::default(),
+            cb_played_local: Callback::default(),
 
             live_players: DashMap::new(),
             messages: Mutex::default(),
@@ -248,9 +260,9 @@ impl Client {
     }
 
     async fn rcall<R>(&self, payload: ClientCommand, cb: &RCallback<R>) -> Result<R> {
-        self.stream.send(payload).await?;
         let (tx, rx) = oneshot::channel();
         *cb.lock().await = Some(tx);
+        self.stream.send(payload).await?;
         time::timeout(TIMEOUT, rx)
             .await
             .context("timeout")??
@@ -358,6 +370,47 @@ impl Client {
             &self.state.cb_select_chart,
         )
         .await
+    }
+
+    /// Upload a private chart ZIP to the current self-hosted multiplayer room.
+    /// The server only accepts this from the room host while selecting charts.
+    pub async fn upload_local_chart(&self, name: String, bytes: Vec<u8>) -> Result<()> {
+        anyhow::ensure!(!bytes.is_empty() && bytes.len() <= MAX_LOCAL_CHART_BYTES, "local chart ZIP exceeds 32 MiB");
+        let sha256 = format!("{:x}", Sha256::digest(&bytes));
+        self.rcall(ClientCommand::StartLocalUpload { name, size: bytes.len() as u32, sha256 }, &self.state.cb_start_local_upload).await?;
+        for (index, data) in bytes.chunks(LOCAL_CHART_CHUNK_BYTES).enumerate() {
+            let offset = index * LOCAL_CHART_CHUNK_BYTES;
+            self.rcall(ClientCommand::LocalUploadChunk { offset: offset as u32, data: data.to_vec() }, &self.state.cb_local_upload_chunk).await?;
+        }
+        self.rcall(ClientCommand::FinishLocalUpload, &self.state.cb_finish_local_upload).await
+    }
+
+    /// Retrieve a host-provided chart from the room, with bounds and checksum verification.
+    pub async fn download_local_chart(&self) -> Result<(Vec<u8>, String)> {
+        let mut bytes = Vec::new();
+        let mut expected_hash: Option<String> = None;
+        let mut total_size: Option<u32> = None;
+        loop {
+            let offset = bytes.len() as u32;
+            let part = self.rcall(ClientCommand::FetchLocalChunk { offset }, &self.state.cb_fetch_local_chunk).await?;
+            anyhow::ensure!(part.offset == offset, "invalid local chart chunk offset");
+            anyhow::ensure!(part.total_size > 0 && part.total_size as usize <= MAX_LOCAL_CHART_BYTES, "invalid local chart size");
+            anyhow::ensure!(!part.data.is_empty() && part.data.len() <= LOCAL_CHART_CHUNK_BYTES, "invalid local chart chunk");
+            anyhow::ensure!(total_size.is_none_or(|v| v == part.total_size), "local chart size changed while downloading");
+            anyhow::ensure!(expected_hash.as_ref().is_none_or(|v| v == &part.sha256), "local chart checksum changed");
+            total_size = Some(part.total_size);
+            expected_hash = Some(part.sha256);
+            bytes.extend_from_slice(&part.data);
+            anyhow::ensure!(bytes.len() <= part.total_size as usize, "local chart exceeds declared size");
+            if bytes.len() == part.total_size as usize { break; }
+        }
+        let digest = format!("{:x}", Sha256::digest(&bytes));
+        anyhow::ensure!(expected_hash.as_deref() == Some(digest.as_str()), "local chart SHA-256 mismatch");
+        Ok((bytes, digest))
+    }
+
+    pub async fn played_local(&self, score: i32, accuracy: f32, full_combo: bool) -> Result<()> {
+        self.rcall(ClientCommand::PlayedLocal { score, accuracy, full_combo }, &self.state.cb_played_local).await
     }
 
     #[inline]
@@ -521,5 +574,10 @@ async fn process(state: Arc<State>, cmd: ServerCommand) {
         ServerCommand::Abort(res) => {
             cb(&state.cb_abort, res).await;
         }
+        ServerCommand::StartLocalUpload(res) => cb(&state.cb_start_local_upload, res).await,
+        ServerCommand::LocalUploadChunk(res) => cb(&state.cb_local_upload_chunk, res).await,
+        ServerCommand::FinishLocalUpload(res) => cb(&state.cb_finish_local_upload, res).await,
+        ServerCommand::FetchLocalChunk(res) => cb(&state.cb_fetch_local_chunk, res).await,
+        ServerCommand::PlayedLocal(res) => cb(&state.cb_played_local, res).await,
     }
 }

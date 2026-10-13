@@ -153,6 +153,15 @@ pub struct JudgeEvent {
     pub judgement: Judgement,
 }
 
+/// Data returned by the self-hosted room when a player downloads its chart.
+#[derive(Debug, Clone, BinaryData)]
+pub struct LocalChartChunk {
+    pub offset: u32,
+    pub total_size: u32,
+    pub sha256: String,
+    pub data: Vec<u8>,
+}
+
 #[derive(Debug, BinaryData)]
 pub enum ClientCommand {
     Ping,
@@ -175,6 +184,13 @@ pub enum ClientCommand {
     CancelReady,
     Played { id: i32 },
     Abort,
+
+    // Appended to preserve the existing official-chart command numbers.
+    StartLocalUpload { name: String, size: u32, sha256: String },
+    LocalUploadChunk { offset: u32, data: Vec<u8> },
+    FinishLocalUpload,
+    FetchLocalChunk { offset: u32 },
+    PlayedLocal { score: i32, accuracy: f32, full_combo: bool },
 }
 
 #[derive(Clone, Debug, BinaryData)]
@@ -231,6 +247,7 @@ pub enum Message {
     CycleRoom {
         cycle: bool,
     },
+    SelectLocalChart { user: i32, name: String },
 }
 
 #[derive(Debug, BinaryData, Clone, Copy)]
@@ -305,4 +322,10 @@ pub enum ServerCommand {
     CancelReady(SResult<()>),
     Played(SResult<()>),
     Abort(SResult<()>),
+
+    StartLocalUpload(SResult<()>),
+    LocalUploadChunk(SResult<()>),
+    FinishLocalUpload(SResult<()>),
+    FetchLocalChunk(SResult<LocalChartChunk>),
+    PlayedLocal(SResult<()>),
 }

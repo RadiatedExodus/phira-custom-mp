@@ -14,6 +14,10 @@ use tokio::{
 };
 use tracing::{error, trace, warn};
 
+/// Room-local ZIP transfer limits; chunks stay below the TCP packet cap.
+pub const MAX_LOCAL_CHART_BYTES: usize = 32 * 1024 * 1024;
+pub const LOCAL_CHART_CHUNK_BYTES: usize = 64 * 1024;
+
 pub const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(3);
 pub const HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(2);
 pub const HEARTBEAT_DISCONNECT_TIMEOUT: Duration = Duration::from_secs(10);
