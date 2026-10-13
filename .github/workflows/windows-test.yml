@@ -9,6 +9,7 @@ on:
       - '**/*.rs'
       - '**/Cargo.toml'
       - 'Cargo.lock'
+      - 'docs/windows-test-build.md'
 
 permissions:
   contents: read
