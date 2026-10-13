@@ -2,9 +2,9 @@ use crate::{
     client::{Chart, Ptr, UserManager},
     dir, get_data,
     mp::L10N_LOCAL,
-    scene::{Downloading, SongScene, RECORD_ID},
+    scene::{compress_folder, Downloading, SongScene, LOCAL_MP_RESULT, RECORD_ID},
 };
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use inputbox::InputBox;
 use macroquad::prelude::*;
 use phira_mp_client::Client;
@@ -22,11 +22,46 @@ use prpr::{
 };
 use smallvec::SmallVec;
 use std::{
-    fs::File,
-    path::Path,
+    fs::{self, File},
+    io::Cursor,
+    path::{Path, PathBuf},
     sync::{atomic::Ordering, Arc},
 };
 use tracing::warn;
+use uuid::Uuid;
+
+/// Extract a checked room chart to a content-addressed folder.
+/// ZIP size and uncompressed size are both bounded to prevent archive bombs.
+fn install_room_chart(bytes: Vec<u8>, digest: String) -> Result<String> {
+    let root = PathBuf::from(dir::charts()?).join("mp-local");
+    fs::create_dir_all(&root)?;
+    let target = root.join(&digest);
+    let local_path = format!("mp-local/{digest}");
+    if target.exists() { return Ok(local_path); }
+    let mut zip = zip::ZipArchive::new(Cursor::new(&bytes))?;
+    if zip.len() > 4096 { bail!("local chart archive has too many files"); }
+    let mut extracted = 0u64;
+    for i in 0..zip.len() {
+        let file = zip.by_index(i)?;
+        if file.enclosed_name().is_none() { bail!("unsafe path in local chart archive"); }
+        extracted = extracted.checked_add(file.size()).ok_or_else(|| anyhow!("local chart archive too large"))?;
+        if extracted > 128 * 1024 * 1024 { bail!("local chart archive expands beyond 128 MiB"); }
+    }
+    drop(zip);
+    let tmp = root.join(format!(".partial-{}", Uuid::new_v4()));
+    fs::create_dir(&tmp)?;
+    let result = (|| -> Result<()> {
+        let target_dir = prpr::dir::Dir::new(&tmp)?;
+        prpr::ext::unzip_into(Cursor::new(bytes), &target_dir, true)?;
+        let _: ChartInfo = serde_yaml::from_reader(File::open(tmp.join("info.yml"))?)?;
+        if target.exists() { return Ok(()); }
+        fs::rename(&tmp, &target)?;
+        Ok(())
+    })();
+    if result.is_err() || tmp.exists() { let _ = fs::remove_dir_all(&tmp); }
+    result?;
+    Ok(local_path)
+}
 
 const ENTER_TRANSIT: f32 = 0.5;
 const USER_LIST_TRANSIT: f32 = 0.4;
@@ -91,6 +126,8 @@ pub struct MPPanel {
 
     download_task: Option<Task<Result<Arc<Chart>>>>,
     downloading: Option<Downloading>,
+    local_chart_task: Option<Task<Result<String>>>,
+    local_path: Option<String>,
     // true for request_start, false for ready
     download_next: bool,
 
@@ -148,6 +185,8 @@ impl MPPanel {
 
             download_task: None,
             downloading: None,
+            local_chart_task: None,
+            local_path: None,
             download_next: false,
 
             chart_id: None,
@@ -177,6 +216,7 @@ impl MPPanel {
             || self.create_room_task.is_some()
             || self.chat_task.is_some()
             || self.download_task.is_some()
+            || self.local_chart_task.is_some()
             || self.task.is_some()
             || self.scene_task.is_some()
     }
@@ -221,6 +261,28 @@ impl MPPanel {
         }));
     }
 
+    /// Room host can select any locally imported chart without publishing it.
+    pub fn select_local_chart(&mut self, path: String, name: String) {
+        let client = self.clone_client();
+        if !client.blocking_is_host().unwrap_or(false) {
+            show_message(mtl!("select-chart-host-only")).error();
+            return;
+        }
+        if !matches!(client.blocking_room_state(), Some(RoomState::SelectChart(_))) {
+            show_message(mtl!("select-chart-not-now")).error();
+            return;
+        }
+        self.local_path = None;
+        self.task = Some(Task::new(async move {
+            let source = Path::new(&dir::charts()?).join(path);
+            if !source.is_dir() { bail!("local chart folder was not found"); }
+            let mut zip = Cursor::new(Vec::new());
+            compress_folder(&source, &mut zip)?;
+            client.upload_local_chart(name, zip.into_inner()).await?;
+            Ok(())
+        }));
+    }
+
     fn request_start(&mut self) {
         if matches!(self.client.as_ref().unwrap().blocking_room_state().unwrap(), RoomState::SelectChart(None)) {
             show_message(mtl!("request-start-no-chart")).error();
@@ -232,7 +294,15 @@ impl MPPanel {
     fn check_download(&mut self, next: bool) {
         let id = self.chart_id.unwrap();
         self.download_next = next;
-        self.download_task = Some(Task::new(async move { Ptr::new(id).fetch().await }));
+        if id == -1 {
+            let client = self.clone_client();
+            self.local_chart_task = Some(Task::new(async move {
+                let (bytes, digest) = client.download_local_chart().await?;
+                install_room_chart(bytes, digest)
+            }));
+        } else {
+            self.download_task = Some(Task::new(async move { Ptr::new(id).fetch().await }));
+        }
     }
 
     fn post_download(&mut self) {
@@ -455,6 +525,7 @@ impl MPPanel {
                             M::Abort { user } => mtl!("msg-abort", "user" => client.user_name(user)),
                             M::LockRoom { lock } => mtl!("msg-room-lock", "lock" => lock.to_string()),
                             M::CycleRoom { cycle } => mtl!("msg-room-cycle", "cycle" => cycle.to_string()),
+                            M::SelectLocalChart { user, name } => format!("{} selected local chart: {name}", client.user_name(user)).into(),
                         };
                         Message {
                             content,
@@ -471,11 +542,17 @@ impl MPPanel {
                     self.game_start_consumed = true;
                     let id = self.chart_id.unwrap();
                     RECORD_ID.store(-1, Ordering::Relaxed);
+                    *LOCAL_MP_RESULT.lock().unwrap() = None;
                     self.need_upload = true;
                     self.entered = false;
+                    let local_path = if id == -1 {
+                        self.local_path.clone().ok_or_else(|| anyhow!("room chart not downloaded"))?
+                    } else {
+                        format!("download/{id}")
+                    };
                     self.scene_task = SongScene::global_launch(
-                        Some(id),
-                        &format!("download/{id}"),
+                        (id != -1).then_some(id),
+                        &local_path,
                         Mods::default(),
                         GameMode::NoRetry,
                         self.client.as_ref().map(Arc::clone),
@@ -550,6 +627,18 @@ impl MPPanel {
                     }
                 }
                 self.download_task = None;
+            }
+        }
+        if let Some(task) = &mut self.local_chart_task {
+            if let Some(res) = task.take() {
+                match res {
+                    Ok(path) => {
+                        self.local_path = Some(path);
+                        self.post_download();
+                    }
+                    Err(err) => show_error(err.context("failed to receive multiplayer local chart")),
+                }
+                self.local_chart_task = None;
             }
         }
         if let Some(dl) = &mut self.downloading {
@@ -632,13 +721,22 @@ impl MPPanel {
             }
         }
         if self.need_upload && self.entered {
-            let id = RECORD_ID.load(Ordering::Relaxed);
-            if id != -1 {
-                let client = self.clone_client();
-                self.task = Some(Task::new(async move { client.played(id).await }));
+            let client = self.clone_client();
+            if self.chart_id == Some(-1) {
+                if let Some(record) = LOCAL_MP_RESULT.lock().unwrap().take() {
+                    self.task = Some(Task::new(async move {
+                        client.played_local(record.score, record.accuracy, record.full_combo).await
+                    }));
+                } else {
+                    self.task = Some(Task::new(async move { client.abort().await }));
+                }
             } else {
-                let client = self.clone_client();
-                self.task = Some(Task::new(async move { client.abort().await }));
+                let id = RECORD_ID.load(Ordering::Relaxed);
+                if id != -1 {
+                    self.task = Some(Task::new(async move { client.played(id).await }));
+                } else {
+                    self.task = Some(Task::new(async move { client.abort().await }));
+                }
             }
             self.need_upload = false;
         }

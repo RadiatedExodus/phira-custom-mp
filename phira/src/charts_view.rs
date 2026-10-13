@@ -228,7 +228,12 @@ impl ChartsView {
                                         panel.show(rt);
                                     } else {
                                         use crate::mp::{mtl, L10N_LOCAL};
-                                        show_message(mtl!("select-chart-local")).error();
+                                        if let Some(path) = chart.local_path.as_ref().filter(|p| !p.starts_with(':')) {
+                                            panel.select_local_chart(path.clone(), chart.info.name.clone());
+                                            panel.show(rt);
+                                        } else {
+                                            show_message(mtl!("select-chart-local")).error();
+                                        }
                                     }
                                     return true;
                                 }
