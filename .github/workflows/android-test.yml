@@ -1,0 +1,52 @@
+name: Android test APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [multiplayer-host-local-charts]
+    paths:
+      - '.github/workflows/android-test.yml'
+      - 'scripts/android/**'
+      - '**/*.rs'
+      - '**/Cargo.toml'
+      - 'Cargo.lock'
+
+permissions:
+  contents: read
+
+jobs:
+  apk:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      CARGO_TERM_COLOR: always
+      ANDROID_NDK_VERSION: 28.2.13676358
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - name: Install Android tools and Rust
+        run: |
+          sdkmanager 'build-tools;35.0.0' 'platforms;android-35' "ndk;$ANDROID_NDK_VERSION"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$ANDROID_NDK_VERSION" >> "$GITHUB_ENV"
+          echo "$ANDROID_HOME/build-tools/35.0.0" >> "$GITHUB_PATH"
+          rustup toolchain install
+          rustup target add aarch64-linux-android
+          cargo +stable install cargo-ndk --version 4.1.2 --locked
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: android-arm64
+          cache-on-failure: 'true'
+      - name: Build modified client (including video)
+        run: cargo ndk -t arm64-v8a --platform 26 build --locked --release -p phira --lib
+      - name: Package and test-sign APK
+        run: bash scripts/android/package.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: phira-private-charts-arm64-test-${{ github.sha }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 30

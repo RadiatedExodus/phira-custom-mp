@@ -339,6 +339,21 @@ fn on_pause_resume(pause: bool) {
     }
 }
 
+// The official Android shell calls this optional closed-source input hook.
+// Touch input itself is delivered separately through surfaceOnTouch.
+#[cfg(all(target_os = "android", not(closed)))]
+#[no_mangle]
+pub extern "C" fn Java_quad_1native_QuadNative_preprocessInput(
+    _env: EnvUnowned,
+    _class: JClass,
+    _event: jni::objects::JObject,
+    _x: jni::sys::jfloat,
+    _y: jni::sys::jfloat,
+    _first: jni::sys::jboolean,
+    _second: jni::sys::jboolean,
+) {
+}
+
 #[cfg(target_os = "android")]
 #[no_mangle]
 pub extern "C" fn Java_quad_1native_QuadNative_initializeEnvironment(env: EnvUnowned, _class: JClass) {
