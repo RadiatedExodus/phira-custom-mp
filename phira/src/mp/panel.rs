@@ -59,6 +59,8 @@ impl Message {
     }
 }
 
+type PreparedLocalChart = (String, Vec<String>);
+
 pub struct MPPanel {
     pub client: Option<Arc<Client>>,
 
@@ -94,8 +96,8 @@ pub struct MPPanel {
 
     download_task: Option<Task<Result<Arc<Chart>>>>,
     downloading: Option<Downloading>,
-    local_chart_task: Option<Task<Result<(String, Vec<String>)>>>,
-    save_chart_task: Option<Task<Result<(String, ChartInfo, bool)>>>,
+    local_chart_task: Option<Task<Result<PreparedLocalChart>>>,
+    save_chart_task: Option<Task<Result<cache::SavedChart>>>,
     save_chart_btn: DRectButton,
     save_available: bool,
     local_path: Option<String>,
@@ -658,7 +660,16 @@ impl MPPanel {
         if let Some(task) = &mut self.save_chart_task {
             if let Some(res) = task.take() {
                 match res {
-                    Ok((path, info, already)) => {
+                    Ok(cache::SavedChart {
+                        path,
+                        info,
+                        already_saved,
+                        warnings,
+                    }) => {
+                        for warning in warnings {
+                            warn!("{warning}");
+                            show_error(anyhow!(warning));
+                        }
                         self.local_path = Some(path.clone());
                         if !get_data().charts.iter().any(|chart| chart.local_path == path) {
                             get_data_mut().charts.push(LocalChart {
@@ -673,7 +684,12 @@ impl MPPanel {
                         match save_data() {
                             Ok(()) => {
                                 self.save_available = false;
-                                show_message(if already { mtl!("local-already-saved") } else { mtl!("local-saved") }).ok();
+                                show_message(if already_saved {
+                                    mtl!("local-already-saved")
+                                } else {
+                                    mtl!("local-saved")
+                                })
+                                .ok();
                             }
                             Err(error) => {
                                 show_error(error.context("Chart files are saved, but the library could not be persisted. Retry Save to Local."))

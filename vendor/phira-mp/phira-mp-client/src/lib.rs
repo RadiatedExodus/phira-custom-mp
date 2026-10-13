@@ -3,20 +3,20 @@ pub mod resolver;
 use anyhow::{Context, Error, Result};
 use dashmap::DashMap;
 use phira_mp_common::{
-    ClientCommand, ClientRoomState, HEARTBEAT_INTERVAL, HEARTBEAT_TIMEOUT, JoinRoomResponse, JudgeEvent, LOCAL_CHART_CHUNK_BYTES, LocalChartChunk,
-    LocalChartMetadata, MAX_LOCAL_CHART_BYTES, Message, RoomId, RoomState, ServerCommand, Stream, TouchFrame, UserInfo,
+    ClientCommand, ClientRoomState, JoinRoomResponse, JudgeEvent, LocalChartChunk, LocalChartMetadata, Message, RoomId, RoomState, ServerCommand,
+    Stream, TouchFrame, UserInfo, HEARTBEAT_INTERVAL, HEARTBEAT_TIMEOUT, LOCAL_CHART_CHUNK_BYTES, MAX_LOCAL_CHART_BYTES,
 };
 use sha2::{Digest, Sha256};
 use std::{
     sync::{
-        Arc,
         atomic::{AtomicU8, Ordering},
+        Arc,
     },
     time::{Duration, Instant},
 };
 use tokio::{
     net::TcpStream,
-    sync::{Mutex, Notify, RwLock, oneshot},
+    sync::{oneshot, Mutex, Notify, RwLock},
     task::JoinHandle,
     time,
 };
@@ -242,7 +242,12 @@ impl Client {
 
     async fn rcall<R>(&self, payload: ClientCommand, cb: &RCallback<R>) -> Result<R> {
         let (tx, rx) = oneshot::channel();
-        *cb.lock().await = Some(tx);
+        {
+            let mut pending = cb.lock().await;
+            // Without request IDs, a timed-out call must drain its reply before retrying.
+            anyhow::ensure!(pending.is_none(), "Previous multiplayer request is still pending; reconnect before retrying.");
+            *pending = Some(tx);
+        }
         self.stream.send(payload).await?;
         time::timeout(TIMEOUT, rx).await.context("timeout")??.map_err(Error::msg)
     }
@@ -561,5 +566,60 @@ async fn process(state: Arc<State>, cmd: ServerCommand) {
         ServerCommand::FetchLocalChunk(res) => cb(&state.cb_fetch_local_chunk, res).await,
         ServerCommand::PlayedLocal(res) => cb(&state.cb_played_local, res).await,
         ServerCommand::LocalChartMetadata(res) => cb(&state.cb_local_metadata, res).await,
+    }
+}
+
+#[cfg(test)]
+mod cache_request_tests {
+    use super::*;
+    use tokio::{net::TcpListener, sync::mpsc};
+
+    #[tokio::test]
+    async fn metadata_only_request_and_late_reply_recovery() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (tx, mut received) = mpsc::channel(8);
+        let accept = tokio::spawn(async move {
+            let (tcp, _) = listener.accept().await.unwrap();
+            Stream::<ServerCommand, ClientCommand>::new(
+                None,
+                tcp,
+                Box::new(move |_, command| {
+                    let tx = tx.clone();
+                    async move {
+                        tx.send(command).await.unwrap();
+                    }
+                }),
+            )
+            .await
+            .unwrap()
+        });
+        let client = Client::new(TcpStream::connect(address).await.unwrap()).await.unwrap();
+        let server = accept.await.unwrap();
+        let metadata = LocalChartMetadata {
+            archive_sha256: "a".repeat(64),
+            content_sha256: "b".repeat(64),
+            size: 123,
+        };
+        let (result, ()) = tokio::join!(client.local_chart_metadata(), async {
+            let command = time::timeout(Duration::from_secs(2), received.recv()).await.unwrap().unwrap();
+            assert!(matches!(command, ClientCommand::GetLocalChartMetadata));
+            server.send(ServerCommand::LocalChartMetadata(Ok(metadata.clone()))).await.unwrap();
+        });
+        let result = result.unwrap();
+        assert_eq!(result.content_sha256, metadata.content_sha256);
+        assert!(received.try_recv().is_err(), "metadata lookup must not fetch chart chunks");
+
+        // Simulate a caller timing out before its reply arrives.
+        let (sender, receiver) = oneshot::channel();
+        drop(receiver);
+        *client.state.cb_local_metadata.lock().await = Some(sender);
+        let error = client.local_chart_metadata().await.unwrap_err();
+        assert!(format!("{error:#}").contains("Previous multiplayer request"));
+        assert!(received.try_recv().is_err(), "a retry must not overwrite the old callback");
+        process(Arc::clone(&client.state), ServerCommand::LocalChartMetadata(Ok(metadata.clone()))).await;
+        assert!(client.state.cb_local_metadata.lock().await.is_none());
+        // An unsolicited duplicate response must not panic the receive task either.
+        process(Arc::clone(&client.state), ServerCommand::LocalChartMetadata(Ok(metadata))).await;
     }
 }

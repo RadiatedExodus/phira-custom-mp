@@ -260,16 +260,26 @@ pub fn install(charts: &Path, bytes: Vec<u8>, archive_hash: &str, expected: &str
     }
 }
 
-pub fn save(charts: &Path, path: &str, saved: &[String]) -> Result<(String, ChartInfo, bool)> {
+pub struct SavedChart {
+    pub path: String,
+    pub info: ChartInfo,
+    pub already_saved: bool,
+    pub warnings: Vec<String>,
+}
+
+pub fn save(charts: &Path, path: &str, saved: &[String]) -> Result<SavedChart> {
     let source = charts.join(relative(path)?);
     let hash = fingerprint(&source)?;
     let mut warnings = Vec::new();
     let existing = find_saved(charts, &hash, saved, &mut warnings)?;
-    // A save must not hide verification failures in the existing library.
-    ensure!(warnings.is_empty(), "{}", warnings.join("\n"));
     if let Some(existing) = existing.filter(|p| !p.starts_with("mp-local/")) {
         let info = serde_yaml::from_reader(File::open(charts.join(relative(&existing)?).join("info.yml"))?)?;
-        return Ok((existing, info, true));
+        return Ok(SavedChart {
+            path: existing,
+            info,
+            already_saved: true,
+            warnings,
+        });
     }
     ensure!(path == format!("mp-local/{hash}"), "only a verified cached chart can be saved");
     fs::create_dir_all(charts.join("custom"))?;
@@ -277,7 +287,12 @@ pub fn save(charts: &Path, path: &str, saved: &[String]) -> Result<(String, Char
     if charts.join(&target).try_exists()? {
         if fingerprint(&charts.join(&target))? == hash {
             let info = serde_yaml::from_reader(File::open(charts.join(&target).join("info.yml"))?)?;
-            return Ok((target, info, true));
+            return Ok(SavedChart {
+                path: target,
+                info,
+                already_saved: true,
+                warnings,
+            });
         }
         target = format!("custom/mp-{hash}-{}", Uuid::new_v4());
     }
@@ -287,7 +302,12 @@ pub fn save(charts: &Path, path: &str, saved: &[String]) -> Result<(String, Char
         fs::remove_file(stamp).context("failed to remove cache access marker")?;
     }
     fs::rename(source, charts.join(&target)).context("failed to save chart; cached copy was retained")?;
-    Ok((target, info, false))
+    Ok(SavedChart {
+        path: target,
+        info,
+        already_saved: false,
+        warnings,
+    })
 }
 
 #[cfg(test)]
@@ -318,12 +338,13 @@ mod tests {
         let hash = fingerprint(seed.path()).unwrap();
         let path = format!("mp-local/{hash}");
         chart(&root.path().join(&path), b"music");
-        let (saved, _, already) = save(root.path(), &path, &[]).unwrap();
-        assert!(!already);
+        let result = save(root.path(), &path, &[]).unwrap();
+        let saved = result.path;
+        assert!(!result.already_saved);
         assert!(!root.path().join(&path).exists());
-        let (same, _, already) = save(root.path(), &saved, std::slice::from_ref(&saved)).unwrap();
-        assert!(already);
-        assert_eq!(same, saved);
+        let same = save(root.path(), &saved, std::slice::from_ref(&saved)).unwrap();
+        assert!(same.already_saved);
+        assert_eq!(same.path, saved);
     }
     #[test]
     fn corrupt_cache_is_not_reused_and_saved_files_are_not_evicted() {
@@ -364,13 +385,13 @@ mod tests {
         assert_eq!(find(root.path(), &hash, &[], &mut Vec::new()).unwrap(), Some(path.clone()));
         let same = install(root.path(), second.clone(), &format!("{:x}", Sha256::digest(&second)), &hash, &[]).unwrap();
         assert_eq!(path, same);
-        let (saved, _, _) = save(root.path(), &path, &[]).unwrap();
+        let saved = save(root.path(), &path, &[]).unwrap().path;
         assert_eq!(find(root.path(), &hash, std::slice::from_ref(&saved), &mut Vec::new()).unwrap(), Some(saved.clone()));
         // A stale cache and already-saved library entry must not make a second library item.
         install(root.path(), first.clone(), &format!("{:x}", Sha256::digest(&first)), &hash, &[]).unwrap();
-        let (deduped, _, already) = save(root.path(), &path, std::slice::from_ref(&saved)).unwrap();
-        assert!(already);
-        assert_eq!(deduped, saved);
+        let deduped = save(root.path(), &path, std::slice::from_ref(&saved)).unwrap();
+        assert!(deduped.already_saved);
+        assert_eq!(deduped.path, saved);
         // Edits are a different version and may never be mistaken for the original.
         fs::write(root.path().join(&saved).join("music.ogg"), b"edit").unwrap();
         assert!(find_saved(root.path(), &hash, &[saved], &mut Vec::new()).unwrap().is_none());

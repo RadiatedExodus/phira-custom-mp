@@ -4,7 +4,7 @@ pub use bin::*;
 mod command;
 pub use command::*;
 
-use anyhow::{Error, Result, bail};
+use anyhow::{bail, Error, Result};
 use std::{future::Future, marker::PhantomData, sync::Arc, time::Duration};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
