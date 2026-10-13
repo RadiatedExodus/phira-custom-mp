@@ -644,9 +644,8 @@ impl MPPanel {
             if let Some(res) = task.take() {
                 match res {
                     Ok((path, warnings)) => {
-                        for warning in warnings {
-                            warn!("{warning}");
-                            show_error(anyhow!(warning));
+                        if !warnings.is_empty() {
+                            show_error(anyhow!(warnings.join("\n\n")));
                         }
                         self.local_path = Some(path);
                         self.save_available = false;
@@ -666,9 +665,8 @@ impl MPPanel {
                         already_saved,
                         warnings,
                     }) => {
-                        for warning in warnings {
-                            warn!("{warning}");
-                            show_error(anyhow!(warning));
+                        if !warnings.is_empty() {
+                            show_error(anyhow!(warnings.join("\n\n")));
                         }
                         self.local_path = Some(path.clone());
                         if !get_data().charts.iter().any(|chart| chart.local_path == path) {

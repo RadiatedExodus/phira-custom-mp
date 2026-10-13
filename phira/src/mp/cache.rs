@@ -129,7 +129,11 @@ fn find_saved(charts: &Path, hash: &str, saved: &[String], warnings: &mut Vec<St
         match fingerprint(&absolute) {
             Ok(actual) if actual == hash => return Ok(Some(path.clone())),
             Ok(_) => (),
-            Err(error) => warnings.push(format!("Could not verify saved chart {path}: {error:#}")),
+            Err(error) => {
+                let warning = format!("Could not verify saved chart {path}: {error:#}");
+                tracing::warn!("{warning}");
+                warnings.push(warning);
+            }
         }
     }
     Ok(None)
@@ -148,7 +152,9 @@ fn find_cached(charts: &Path, hash: &str, warnings: &mut Vec<String>) -> Result<
             Err(error) => format!("{error:#}"),
         };
         ensure!(!fs::symlink_metadata(&target)?.file_type().is_symlink(), "refusing to remove symlinked cache entry");
-        warnings.push(format!("A damaged cached chart was removed and will be downloaded again: {reason}"));
+        let warning = format!("A damaged cached chart was removed and will be downloaded again: {reason}");
+        tracing::warn!("{warning}");
+        warnings.push(warning);
         fs::remove_dir_all(&target).context("failed to remove damaged cache")?;
     }
     Ok(None)

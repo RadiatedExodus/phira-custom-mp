@@ -5,10 +5,12 @@ on:
   push:
     paths:
       - "vendor/phira-mp/**"
+      - "phira/src/mp/**"
       - ".github/workflows/check-custom-mp.yml"
   pull_request:
     paths:
       - "vendor/phira-mp/**"
+      - "phira/src/mp/**"
       - ".github/workflows/check-custom-mp.yml"
 
 jobs:
@@ -29,6 +31,8 @@ jobs:
         run: cargo test --manifest-path vendor/phira-mp/Cargo.toml --workspace
       - name: Build Linux multiplayer server
         run: cargo build --release --manifest-path vendor/phira-mp/Cargo.toml -p phira-mp-server
+      - name: Smoke test Linux server
+        run: vendor/phira-mp/target/release/phira-mp-server --help
       - name: Package server
         run: |
           mkdir -p dist
