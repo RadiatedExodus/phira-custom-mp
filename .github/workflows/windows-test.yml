@@ -27,6 +27,14 @@ jobs:
         with:
           key: windows-x64
           cache-on-failure: 'true'
+      - name: Install static zlib for FFmpeg
+        shell: pwsh
+        run: |
+          & "$env:VCPKG_INSTALLATION_ROOT/vcpkg.exe" install zlib:x64-windows-static-md
+          if ($LASTEXITCODE -ne 0) { throw 'zlib installation failed' }
+          $libdir = "$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows-static-md/lib"
+          Copy-Item "$libdir/zlib.lib" "$libdir/z.lib"
+          "LIB=$libdir;$env:LIB" | Out-File -FilePath $env:GITHUB_ENV -Append
       - name: Build Windows client with video
         run: cargo build --locked --release -p phira-main --target x86_64-pc-windows-msvc
       - name: Package portable client
