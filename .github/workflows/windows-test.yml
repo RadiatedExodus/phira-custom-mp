@@ -39,6 +39,8 @@ jobs:
           "LIB=$libdir;$env:LIB" | Out-File -FilePath $env:GITHUB_ENV -Append
       - name: Build Windows client with video
         run: cargo build --locked --release -p phira-main --target x86_64-pc-windows-msvc
+      - name: Test private chart selection
+        run: cargo test --locked --release -p phira --lib multiplayer_selection_tests --target x86_64-pc-windows-msvc
       - name: Package portable client
         shell: pwsh
         run: |
@@ -49,17 +51,17 @@ jobs:
           New-Item -ItemType Directory -Force dist | Out-Null
           Copy-Item template/assets dist/assets -Recurse
           Copy-Item assets/* dist/assets -Recurse -Force
-          Copy-Item target/x86_64-pc-windows-msvc/release/phira-main.exe dist/phira-main.exe
+          Copy-Item target/x86_64-pc-windows-msvc/release/phira-main.exe dist/Phira-Private-Charts.exe
           Copy-Item LICENSE dist/LICENSE
           Copy-Item docs/windows-test-build.md dist/README.md
-          @('@echo off', 'cd /d "%~dp0"', 'phira-main.exe') | Set-Content dist/Start-Phira.cmd -Encoding ascii
+          @('@echo off', 'cd /d "%~dp0"', 'Phira-Private-Charts.exe') | Set-Content dist/Start-Phira.cmd -Encoding ascii
           git rev-parse HEAD | Set-Content dist/source-commit.txt
           if (!(Test-Path dist/assets/font.ttf)) { throw 'Missing font' }
-          $exe = [IO.File]::ReadAllBytes((Resolve-Path dist/phira-main.exe))
+          $exe = [IO.File]::ReadAllBytes((Resolve-Path dist/Phira-Private-Charts.exe))
           if ($exe[0] -ne 77 -or $exe[1] -ne 90) { throw 'Invalid Windows executable' }
           $pe = [BitConverter]::ToInt32($exe, 60)
           if ([BitConverter]::ToUInt16($exe, $pe + 4) -ne 0x8664) { throw 'Expected x64 executable' }
-          (Get-FileHash dist/phira-main.exe -Algorithm SHA256).Hash.ToLowerInvariant() + '  phira-main.exe' | Set-Content dist/SHA256SUMS.txt
+          (Get-FileHash dist/Phira-Private-Charts.exe -Algorithm SHA256).Hash.ToLowerInvariant() + '  Phira-Private-Charts.exe' | Set-Content dist/SHA256SUMS.txt
       - uses: actions/upload-artifact@v4
         with:
           name: phira-private-charts-windows-x64-${{ github.sha }}

@@ -32,6 +32,12 @@ pub static NEED_UPDATE: AtomicBool = AtomicBool::new(false);
 const CHART_PADDING: f32 = 0.013;
 const BACK_FADE_IN_TIME: f32 = 0.2;
 
+// Imported charts can retain a catalog ID in their info.yml. Their local
+// contents must take precedence; downloaded catalog charts keep online play.
+fn multiplayer_local_path(path: Option<&str>, online_id: Option<i32>) -> Option<&str> {
+    path.filter(|path| !path.starts_with(':') && (online_id.is_none() || path.starts_with("custom/") || path.starts_with("custom\\")))
+}
+
 fn transit_time() -> Option<f32> {
     if get_data().prefer_reduced_motion {
         None
@@ -223,17 +229,15 @@ impl ChartsView {
                         let handled_by_mp = MP_PANEL.with(|it| {
                             if let Some(panel) = it.borrow_mut().as_mut() {
                                 if panel.in_room() {
-                                    if let Some(id) = chart.info.id {
+                                    if let Some(path) = multiplayer_local_path(chart.local_path.as_deref(), chart.info.id) {
+                                        panel.select_local_chart(path.to_owned(), chart.info.name.clone());
+                                        panel.show(rt);
+                                    } else if let Some(id) = chart.info.id {
                                         panel.select_chart(id);
                                         panel.show(rt);
                                     } else {
                                         use crate::mp::{mtl, L10N_LOCAL};
-                                        if let Some(path) = chart.local_path.as_ref().filter(|p| !p.starts_with(':')) {
-                                            panel.select_local_chart(path.clone(), chart.info.name.clone());
-                                            panel.show(rt);
-                                        } else {
-                                            show_message(mtl!("select-chart-local")).error();
-                                        }
+                                        show_message(mtl!("select-chart-local")).error();
                                     }
                                     return true;
                                 }
@@ -625,5 +629,25 @@ impl ChartsView {
             }
         }
         None
+    }
+}
+
+#[cfg(test)]
+mod multiplayer_selection_tests {
+    use super::multiplayer_local_path;
+
+    #[test]
+    fn imported_charts_override_embedded_catalog_ids() {
+        assert_eq!(multiplayer_local_path(Some("custom/imported"), Some(123)), Some("custom/imported"));
+        assert_eq!(multiplayer_local_path(Some("custom\\imported"), Some(123)), Some("custom\\imported"));
+        assert_eq!(multiplayer_local_path(Some("custom/imported"), None), Some("custom/imported"));
+    }
+
+    #[test]
+    fn catalog_and_builtin_charts_do_not_become_private_uploads() {
+        assert_eq!(multiplayer_local_path(Some("download/123"), Some(123)), None);
+        assert_eq!(multiplayer_local_path(None, Some(123)), None);
+        assert_eq!(multiplayer_local_path(Some(":builtin"), None), None);
+        assert_eq!(multiplayer_local_path(None, None), None);
     }
 }

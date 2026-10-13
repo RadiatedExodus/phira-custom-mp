@@ -23,7 +23,7 @@ leave-room-failed = Failed to leave room.
 disconnect = Disconnect
 
 request-start = Start Game
-request-start-no-chart = Select an online chart first.
+request-start-no-chart = Select a chart first: close this panel and choose an imported chart in Local or an online chart.
 request-start-failed = Failed to start.
 
 user-list = Users
@@ -56,7 +56,7 @@ chat-sent = Sent
 chat-send-failed = Failed to send message.
 
 select-chart-host-only = Only the host can select charts.
-select-chart-local = You can only select online charts.
+select-chart-local = This chart has no transferable local folder. Import a chart into Local and select it as the room host. Built-in charts are not supported.
 select-chart-failed = Failed to select chart.
 select-chart-not-now = You can't select chart now.
 
