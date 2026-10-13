@@ -28,6 +28,8 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
       - name: Install Android tools and Rust
         run: |
           sdkmanager 'build-tools;35.0.0' 'platforms;android-35' "ndk;$ANDROID_NDK_VERSION"
