@@ -1,4 +1,4 @@
-use crate::{Chart, Record, User};
+use crate::{Chart, LocalChartData, LocalChartUpload, Record, User};
 use anyhow::{Result, bail};
 use phira_mp_common::{ClientRoomState, Message, RoomId, RoomState, ServerCommand};
 use rand::seq::IndexedRandom;
@@ -10,7 +10,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
     },
 };
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, info};
 
 const ROOM_MAX_USERS: usize = 8;
@@ -50,6 +50,8 @@ pub struct Room {
     users: RwLock<Vec<Weak<User>>>,
     monitors: RwLock<Vec<Weak<User>>>,
     pub chart: RwLock<Option<Chart>>,
+    pub local_chart: RwLock<Option<LocalChartData>>,
+    pub local_upload: Mutex<Option<LocalChartUpload>>,
 }
 
 impl Room {
@@ -66,6 +68,8 @@ impl Room {
             users: vec![host].into(),
             monitors: Vec::new().into(),
             chart: RwLock::default(),
+            local_chart: RwLock::default(),
+            local_upload: Mutex::default(),
         }
     }
 

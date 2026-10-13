@@ -13,6 +13,19 @@ pub struct Chart {
     pub name: String,
 }
 
+/// A partially received, room-scoped private chart (not a public upload).
+pub struct LocalChartUpload {
+    pub name: String,
+    pub size: u32,
+    pub sha256: String,
+    pub bytes: Vec<u8>,
+}
+
+pub struct LocalChartData {
+    pub sha256: String,
+    pub bytes: Arc<Vec<u8>>,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct ServerConfig {
     pub monitors: Vec<i32>,

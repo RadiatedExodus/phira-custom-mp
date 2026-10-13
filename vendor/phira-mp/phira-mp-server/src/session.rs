@@ -1,14 +1,15 @@
 use crate::{
-    Chart, InternalRoomState, Record, Room, ServerState,
+    Chart, InternalRoomState, LocalChartData, LocalChartUpload, Record, Room, ServerState,
     l10n::{LANGUAGE, Language},
     tl,
 };
 use anyhow::{Result, anyhow, bail};
 use phira_mp_common::{
     ClientCommand, HEARTBEAT_DISCONNECT_TIMEOUT, JoinRoomResponse, Message, ServerCommand, Stream,
-    UserInfo,
+    UserInfo, LocalChartChunk, LOCAL_CHART_CHUNK_BYTES, MAX_LOCAL_CHART_BYTES,
 };
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 use std::{
     collections::{HashSet, hash_map::Entry},
     ops::DerefMut,
@@ -559,6 +560,7 @@ async fn process(user: Arc<User>, cmd: ClientCommand) -> Option<ServerCommand> {
         ClientCommand::SelectChart { id } => {
             let res: Result<()> = async move {
                 get_room!(room, InternalRoomState::SelectChart);
+                if id <= 0 { bail!("invalid public chart id"); }
                 room.check_host(&user).await?;
                 let span = debug_span!(
                     "select chart",
@@ -580,6 +582,8 @@ async fn process(user: Arc<User>, cmd: ClientCommand) -> Option<ServerCommand> {
                         id: res.id,
                     })
                     .await;
+                    *room.local_chart.write().await = None;
+                    *room.local_upload.lock().await = None;
                     *room.chart.write().await = Some(res);
                     room.on_state_change().await;
                     Ok(())
@@ -708,6 +712,86 @@ async fn process(user: Arc<User>, cmd: ClientCommand) -> Option<ServerCommand> {
             }
             .await;
             Some(ServerCommand::Abort(err_to_str(res)))
+        },
+        ClientCommand::StartLocalUpload { name, size, sha256 } => {
+            let res: Result<()> = async move {
+                get_room!(room, InternalRoomState::SelectChart);
+                room.check_host(&user).await?;
+                if name.trim().is_empty() || name.len() > 128 { bail!("invalid local chart name"); }
+                if size == 0 || size as usize > MAX_LOCAL_CHART_BYTES { bail!("local chart ZIP exceeds 32 MiB"); }
+                if sha256.len() != 64 || !sha256.bytes().all(|c| c.is_ascii_hexdigit()) { bail!("invalid chart SHA-256"); }
+                let mut upload = room.local_upload.lock().await;
+                *upload = Some(LocalChartUpload { name, size, sha256: sha256.to_ascii_lowercase(), bytes: Vec::with_capacity(size as usize) });
+                Ok(())
+            }.await;
+            Some(ServerCommand::StartLocalUpload(err_to_str(res)))
+        }
+        ClientCommand::LocalUploadChunk { offset, data } => {
+            let res: Result<()> = async move {
+                get_room!(room, InternalRoomState::SelectChart);
+                room.check_host(&user).await?;
+                if data.is_empty() || data.len() > LOCAL_CHART_CHUNK_BYTES { bail!("invalid local chart chunk"); }
+                let mut guard = room.local_upload.lock().await;
+                let upload = guard.as_mut().ok_or_else(|| anyhow!("no local chart upload in progress"))?;
+                if upload.bytes.len() != offset as usize || upload.bytes.len() + data.len() > upload.size as usize {
+                    bail!("invalid local chart upload offset or size");
+                }
+                upload.bytes.extend_from_slice(&data);
+                Ok(())
+            }.await;
+            Some(ServerCommand::LocalUploadChunk(err_to_str(res)))
+        }
+        ClientCommand::FinishLocalUpload => {
+            let res: Result<()> = async move {
+                get_room!(room, InternalRoomState::SelectChart);
+                room.check_host(&user).await?;
+                let upload = room.local_upload.lock().await.take().ok_or_else(|| anyhow!("no local chart upload"))?;
+                if upload.bytes.len() != upload.size as usize { bail!("local chart upload incomplete"); }
+                if format!("{:x}", Sha256::digest(&upload.bytes)) != upload.sha256 { bail!("local chart checksum mismatch"); }
+                let name = upload.name;
+                *room.local_chart.write().await = Some(LocalChartData { sha256: upload.sha256, bytes: Arc::new(upload.bytes) });
+                *room.chart.write().await = Some(Chart { id: -1, name: name.clone() });
+                room.send(Message::SelectLocalChart { user: user.id, name }).await;
+                room.on_state_change().await;
+                Ok(())
+            }.await;
+            Some(ServerCommand::FinishLocalUpload(err_to_str(res)))
+        }
+        ClientCommand::FetchLocalChunk { offset } => {
+            let res: Result<LocalChartChunk> = async move {
+                get_room!(room);
+                if !room.chart.read().await.as_ref().is_some_and(|c| c.id == -1) { bail!("room has no local chart selected"); }
+                let guard = room.local_chart.read().await;
+                let chart = guard.as_ref().ok_or_else(|| anyhow!("room chart missing"))?;
+                let len = chart.bytes.len();
+                if offset as usize >= len { bail!("invalid local chart download offset"); }
+                let end = (offset as usize + LOCAL_CHART_CHUNK_BYTES).min(len);
+                Ok(LocalChartChunk { offset, total_size: len as u32, sha256: chart.sha256.clone(), data: chart.bytes[offset as usize..end].to_vec() })
+            }.await;
+            Some(ServerCommand::FetchLocalChunk(err_to_str(res)))
+        }
+        ClientCommand::PlayedLocal { score, accuracy, full_combo } => {
+            let res: Result<()> = async move {
+                get_room!(room);
+                if !room.chart.read().await.as_ref().is_some_and(|c| c.id == -1) { bail!("not a local chart"); }
+                if !(0..=1_000_000).contains(&score) || !accuracy.is_finite() || !(0.0..=1.0).contains(&accuracy) {
+                    bail!("invalid local score");
+                }
+                let mut guard = room.state.write().await;
+                if let InternalRoomState::Playing { results, aborted } = guard.deref_mut() {
+                    if aborted.contains(&user.id) || results.contains_key(&user.id) { bail!("already finished"); }
+                    results.insert(user.id, Record {
+                        id: -1, player: user.id, score,
+                        perfect: 0, good: 0, bad: 0, miss: 0, max_combo: 0,
+                        accuracy, full_combo, std: 0.0, std_score: 0.0,
+                    });
+                    drop(guard);
+                    room.send(Message::Played { user: user.id, score, accuracy, full_combo }).await;
+                    room.check_all_ready().await;
+                } else { bail!("not currently playing"); }
+                Ok(())
+            }.await;
+            Some(ServerCommand::PlayedLocal(err_to_str(res)))
         }
     }
 }
