@@ -541,7 +541,7 @@ impl MPPanel {
                             M::Abort { user } => mtl!("msg-abort", "user" => client.user_name(user)),
                             M::LockRoom { lock } => mtl!("msg-room-lock", "lock" => lock.to_string()),
                             M::CycleRoom { cycle } => mtl!("msg-room-cycle", "cycle" => cycle.to_string()),
-                            M::SelectLocalChart { user, name } => format!("{} selected local chart: {name}", client.user_name(user)).into(),
+                            M::SelectLocalChart { user, name } => format!("{} selected local chart: {name}", client.user_name(user)),
                         };
                         Message {
                             content,
