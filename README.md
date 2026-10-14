@@ -6,6 +6,8 @@ This fork of [TeamFlos/Phira](https://github.com/TeamFlos/phira) lets a room hos
 
 ## Download this fork
 
+The [testing prerelease](https://github.com/shinova55/phira-custom-mp/releases/tag/v0.8.2-private-mp.1) provides Android, Windows x64 and Linux x64 clients, a separate Linux server, checksums and tagged source archives. See the release notes for platform requirements and verification limits.
+
 The following builds contain the current private-chart implementation at commit `ccb434b`:
 
 | Platform | Tested build artifact | Installation |
@@ -63,7 +65,7 @@ On Linux, with the repository's Rust toolchain and build dependencies installed,
 cargo run --release --manifest-path vendor/phira-mp/Cargo.toml -p phira-mp-server -- --port 12346
 ```
 
-Allow access to the server port as appropriate for your network, then set **Multiplayer Server Address** in each client to your server's host and port. Build the server from this repository's `vendor/phira-mp`; installing an upstream MP server separately will not provide this feature. The server check workflow checks/tests the code but does not publish a Linux server binary.
+Allow access to the server port as appropriate for your network, then set **Multiplayer Server Address** in each client to your server's host and port. Build the server from this repository's `vendor/phira-mp`; installing an upstream MP server separately will not provide this feature. The server check workflow checks/tests the code; the three-platform prerelease workflow also packages the Linux x64 server.
 
 See [private multiplayer details](docs/multiplayer-host-local-charts.md) for limits and development checks. Basic private sharing and Windows–Android crossplay have been user-tested, but disconnect recovery, late joins and all device configurations are not comprehensively verified.
 

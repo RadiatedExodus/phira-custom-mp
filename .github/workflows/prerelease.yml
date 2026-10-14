@@ -1,0 +1,84 @@
+name: Three-platform prerelease
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/prerelease.yml']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: private-mp-first-prerelease
+  cancel-in-progress: false
+
+jobs:
+  checks:
+    uses: ./.github/workflows/check.yml
+  windows:
+    uses: ./.github/workflows/windows-test.yml
+  android:
+    uses: ./.github/workflows/android-test.yml
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build and smoke-test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libgtk-3-dev zlib1g-dev pkg-config libssl-dev xvfb xauth libgl1-mesa-dri libasound2-plugins pulseaudio
+          rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: linux-release-x64
+          workspaces: |
+            . -> target
+            vendor/phira-mp -> target
+          cache-on-failure: 'true'
+      - name: Build Linux client and matching server
+        run: |
+          cargo build --locked --release -p phira-main
+          cargo build --locked --release --manifest-path vendor/phira-mp/Cargo.toml -p phira-mp-server
+          cargo test --locked --manifest-path vendor/phira-mp/Cargo.toml --workspace
+      - name: Package and verify Linux binaries
+        run: bash scripts/release/linux.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: phira-private-charts-linux-x64-${{ github.sha }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 30
+  publish:
+    needs: [checks, windows, android, linux]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_TAG: v0.8.2-private-mp.1
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Validate and assemble release assets
+        run: python3 scripts/release/assemble.py
+      - name: Publish verified testing prerelease
+        run: |
+          set -euo pipefail
+          # Never replace an existing release or move its tag.
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "Release already exists; refusing to overwrite it." >&2
+            exit 1
+          fi
+          gh release create "$RELEASE_TAG" --target "$GITHUB_SHA" --draft --prerelease \
+            --title 'Phira Private Multiplayer 0.8.2 — Testing prerelease 1' \
+            --notes-file docs/releases/v0.8.2-private-mp.1.md
+          gh release upload "$RELEASE_TAG" release/*
+          gh release view "$RELEASE_TAG" --json assets > uploaded-assets.json
+          python3 scripts/release/assemble.py --verify-upload uploaded-assets.json
+          gh release edit "$RELEASE_TAG" --draft=false --prerelease
