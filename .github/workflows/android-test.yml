@@ -10,7 +10,6 @@ on:
       - '**/*.rs'
       - '**/Cargo.toml'
       - 'Cargo.lock'
-      - 'docs/android-test-build.md'
 
 permissions:
   contents: read

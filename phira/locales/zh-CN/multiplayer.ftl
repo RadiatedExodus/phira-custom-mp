@@ -84,7 +84,3 @@ msg-room-cycle = { $cycle ->
   [true] 房间已切换为循环模式
   *[other] 房间已切换为普通模式
 }
-
-local-save = 保存到本地
-local-saved = 已保存到本地曲库。
-local-already-saved = 此谱面已在本地曲库中。

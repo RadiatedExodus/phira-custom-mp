@@ -84,7 +84,3 @@ msg-room-cycle = { $cycle ->
   [true] Room mode changed to Cycle.
   *[other] Room mode changed to Normal.
 }
-
-local-save = Save to Local
-local-saved = Chart saved to your local library.
-local-already-saved = This chart is already in your local library.

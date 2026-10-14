@@ -18,13 +18,11 @@ pub struct LocalChartUpload {
     pub name: String,
     pub size: u32,
     pub sha256: String,
-    pub content_sha256: String,
     pub bytes: Vec<u8>,
 }
 
 pub struct LocalChartData {
     pub sha256: String,
-    pub content_sha256: String,
     pub bytes: Arc<Vec<u8>>,
 }
 
@@ -121,7 +119,11 @@ impl Server {
         let mut guard = self.state.sessions.write().await;
         let entry = vacant_entry(&mut guard);
         let session = Session::new(*entry.key(), stream, Arc::clone(&self.state)).await?;
-        info!("received connections from {addr} ({}), version: {}", session.id, session.version());
+        info!(
+            "received connections from {addr} ({}), version: {}",
+            session.id,
+            session.version()
+        );
         entry.insert(session);
         Ok(())
     }

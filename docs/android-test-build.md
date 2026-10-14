@@ -28,9 +28,3 @@ transfer private charts. The public-source build does not include the closed
 official score-attestation implementation; official score submission may be
 unavailable, as noted in the upstream build guide. Private room scores use the
 branch's room-only reporting. Full two-client gameplay needs device testing.
-
-This cache-enabled update needs the updated server as well as updated clients.
-It verifies cached/saved content before downloading missing charts. After private
-play, Save to Local keeps the chart for solo play without another library entry
-for identical content. Saved charts are protected from temporary-cache cleanup.
-Server instructions: https://github.com/shinova55/phira-custom-mp/blob/multiplayer-host-local-charts/docs/multiplayer-host-local-charts.md

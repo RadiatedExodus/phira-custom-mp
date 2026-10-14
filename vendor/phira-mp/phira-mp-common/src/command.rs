@@ -156,84 +156,35 @@ pub struct LocalChartChunk {
     pub data: Vec<u8>,
 }
 
-/// Hash-first lookup. Content hash is advertised by the host and verified locally.
-#[derive(Debug, Clone, BinaryData)]
-pub struct LocalChartMetadata {
-    pub archive_sha256: String,
-    pub content_sha256: String,
-    pub size: u32,
-}
-
 #[derive(Debug, BinaryData)]
 pub enum ClientCommand {
     Ping,
 
-    Authenticate {
-        token: Varchar<32>,
-    },
-    Chat {
-        message: Varchar<200>,
-    },
+    Authenticate { token: Varchar<32> },
+    Chat { message: Varchar<200> },
 
-    Touches {
-        frames: Arc<Vec<TouchFrame>>,
-    },
-    Judges {
-        judges: Arc<Vec<JudgeEvent>>,
-    },
+    Touches { frames: Arc<Vec<TouchFrame>> },
+    Judges { judges: Arc<Vec<JudgeEvent>> },
 
-    CreateRoom {
-        id: RoomId,
-    },
-    JoinRoom {
-        id: RoomId,
-        monitor: bool,
-    },
+    CreateRoom { id: RoomId },
+    JoinRoom { id: RoomId, monitor: bool },
     LeaveRoom,
-    LockRoom {
-        lock: bool,
-    },
-    CycleRoom {
-        cycle: bool,
-    },
+    LockRoom { lock: bool },
+    CycleRoom { cycle: bool },
 
-    SelectChart {
-        id: i32,
-    },
+    SelectChart { id: i32 },
     RequestStart,
     Ready,
     CancelReady,
-    Played {
-        id: i32,
-    },
+    Played { id: i32 },
     Abort,
 
     // Appended to preserve the existing official-chart command numbers.
-    StartLocalUpload {
-        name: String,
-        size: u32,
-        sha256: String,
-    },
-    LocalUploadChunk {
-        offset: u32,
-        data: Vec<u8>,
-    },
+    StartLocalUpload { name: String, size: u32, sha256: String },
+    LocalUploadChunk { offset: u32, data: Vec<u8> },
     FinishLocalUpload,
-    FetchLocalChunk {
-        offset: u32,
-    },
-    PlayedLocal {
-        score: i32,
-        accuracy: f32,
-        full_combo: bool,
-    },
-    StartLocalUploadV2 {
-        name: String,
-        size: u32,
-        sha256: String,
-        content_sha256: String,
-    },
-    GetLocalChartMetadata,
+    FetchLocalChunk { offset: u32 },
+    PlayedLocal { score: i32, accuracy: f32, full_combo: bool },
 }
 
 #[derive(Clone, Debug, BinaryData)]
@@ -368,5 +319,4 @@ pub enum ServerCommand {
     FinishLocalUpload(SResult<()>),
     FetchLocalChunk(SResult<LocalChartChunk>),
     PlayedLocal(SResult<()>),
-    LocalChartMetadata(SResult<LocalChartMetadata>),
 }

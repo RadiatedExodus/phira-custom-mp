@@ -10,16 +10,9 @@ room host select an imported local chart. All participants need compatible
 modified clients; an upstream MP server does not support private charts.
 Test Windows hosting and Android joining, then reverse the roles.
 
-This cache-enabled build requires the updated Linux MP server and compatible
-Android/Windows clients. Older private-transfer servers must be upgraded.
+The multiplayer protocol is unchanged from Android build dbf9386.
 Login/authentication remains unchanged. Selection uploads the chart; starting
-fetches small metadata first and verifies an existing cached or saved copy.
-Only missing content is downloaded. Loading and waiting for other players still
-take time. After private-chart play, choose Save to Local in the room panel to
-keep the chart for solo play. Identical saved charts are reused, and the 512 MiB
-temporary-cache limit never evicts saved library charts.
-See https://github.com/shinova55/phira-custom-mp/blob/multiplayer-host-local-charts/docs/multiplayer-host-local-charts.md
-for the matching server and cache behavior.
+downloads and verifies it for each player, so some delay is expected.
 Private scores are room-only. Official score submission may be unavailable
 because the public build lacks the closed official attestation code.
 

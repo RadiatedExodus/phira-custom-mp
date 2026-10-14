@@ -3,8 +3,8 @@ pub mod resolver;
 use anyhow::{Context, Error, Result};
 use dashmap::DashMap;
 use phira_mp_common::{
-    ClientCommand, ClientRoomState, JoinRoomResponse, JudgeEvent, LocalChartChunk, LocalChartMetadata, Message, RoomId, RoomState, ServerCommand,
-    Stream, TouchFrame, UserInfo, HEARTBEAT_INTERVAL, HEARTBEAT_TIMEOUT, LOCAL_CHART_CHUNK_BYTES, MAX_LOCAL_CHART_BYTES,
+    ClientCommand, ClientRoomState, JoinRoomResponse, JudgeEvent, LocalChartChunk, Message, RoomId, RoomState, ServerCommand, Stream, TouchFrame,
+    UserInfo, HEARTBEAT_INTERVAL, HEARTBEAT_TIMEOUT, LOCAL_CHART_CHUNK_BYTES, MAX_LOCAL_CHART_BYTES,
 };
 use sha2::{Digest, Sha256};
 use std::{
@@ -72,7 +72,6 @@ struct State {
     cb_finish_local_upload: RCallback<()>,
     cb_fetch_local_chunk: RCallback<LocalChartChunk>,
     cb_played_local: RCallback<()>,
-    cb_local_metadata: RCallback<LocalChartMetadata>,
 
     live_players: DashMap<i32, Arc<LivePlayer>>,
     messages: Mutex<Vec<Message>>,
@@ -122,7 +121,6 @@ impl Client {
             cb_finish_local_upload: Callback::default(),
             cb_fetch_local_chunk: Callback::default(),
             cb_played_local: Callback::default(),
-            cb_local_metadata: Callback::default(),
 
             live_players: DashMap::new(),
             messages: Mutex::default(),
@@ -242,12 +240,7 @@ impl Client {
 
     async fn rcall<R>(&self, payload: ClientCommand, cb: &RCallback<R>) -> Result<R> {
         let (tx, rx) = oneshot::channel();
-        {
-            let mut pending = cb.lock().await;
-            // Without request IDs, a timed-out call must drain its reply before retrying.
-            anyhow::ensure!(pending.is_none(), "Previous multiplayer request is still pending; reconnect before retrying.");
-            *pending = Some(tx);
-        }
+        *cb.lock().await = Some(tx);
         self.stream.send(payload).await?;
         time::timeout(TIMEOUT, rx).await.context("timeout")??.map_err(Error::msg)
     }
@@ -338,20 +331,18 @@ impl Client {
 
     /// Upload a private chart ZIP to the current self-hosted multiplayer room.
     /// The server only accepts this from the room host while selecting charts.
-    pub async fn upload_local_chart(&self, name: String, bytes: Vec<u8>, content_sha256: String) -> Result<()> {
+    pub async fn upload_local_chart(&self, name: String, bytes: Vec<u8>) -> Result<()> {
         anyhow::ensure!(!bytes.is_empty() && bytes.len() <= MAX_LOCAL_CHART_BYTES, "local chart ZIP exceeds 32 MiB");
         let sha256 = format!("{:x}", Sha256::digest(&bytes));
         self.rcall(
-            ClientCommand::StartLocalUploadV2 {
-                content_sha256,
+            ClientCommand::StartLocalUpload {
                 name,
                 size: bytes.len() as u32,
                 sha256,
             },
             &self.state.cb_start_local_upload,
         )
-        .await
-        .context("Private chart upload failed. Use the cache-enabled multiplayer server and reconnect.")?;
+        .await?;
         for (index, data) in bytes.chunks(LOCAL_CHART_CHUNK_BYTES).enumerate() {
             let offset = index * LOCAL_CHART_CHUNK_BYTES;
             self.rcall(
@@ -364,20 +355,6 @@ impl Client {
             .await?;
         }
         self.rcall(ClientCommand::FinishLocalUpload, &self.state.cb_finish_local_upload).await
-    }
-
-    pub async fn local_chart_metadata(&self) -> Result<LocalChartMetadata> {
-        let info = self
-            .rcall(ClientCommand::GetLocalChartMetadata, &self.state.cb_local_metadata)
-            .await
-            .context("Private chart metadata failed. Update the multiplayer server to the cache-enabled branch and reconnect.")?;
-        anyhow::ensure!(info.size > 0 && info.size as usize <= MAX_LOCAL_CHART_BYTES, "invalid private chart size");
-        anyhow::ensure!(info.archive_sha256.len() == 64 && info.archive_sha256.bytes().all(|b| b.is_ascii_hexdigit()), "invalid archive hash");
-        anyhow::ensure!(
-            info.content_sha256.is_empty() || (info.content_sha256.len() == 64 && info.content_sha256.bytes().all(|b| b.is_ascii_hexdigit())),
-            "invalid content hash"
-        );
-        Ok(info)
     }
 
     /// Retrieve a host-provided chart from the room, with bounds and checksum verification.
@@ -470,14 +447,7 @@ impl Drop for Client {
 
 async fn process(state: Arc<State>, cmd: ServerCommand) {
     async fn cb<T>(cb: &Callback<T>, res: T) {
-        // A timed-out/cancelled call can still receive a late reply.
-        if let Some(sender) = cb.lock().await.take() {
-            if sender.send(res).is_err() {
-                warn!("discarding reply to a cancelled multiplayer request");
-            }
-        } else {
-            warn!("received multiplayer reply without a pending request");
-        }
+        let _ = cb.lock().await.take().unwrap().send(res);
     }
     match cmd {
         ServerCommand::Pong => {
@@ -565,61 +535,5 @@ async fn process(state: Arc<State>, cmd: ServerCommand) {
         ServerCommand::FinishLocalUpload(res) => cb(&state.cb_finish_local_upload, res).await,
         ServerCommand::FetchLocalChunk(res) => cb(&state.cb_fetch_local_chunk, res).await,
         ServerCommand::PlayedLocal(res) => cb(&state.cb_played_local, res).await,
-        ServerCommand::LocalChartMetadata(res) => cb(&state.cb_local_metadata, res).await,
-    }
-}
-
-#[cfg(test)]
-mod cache_request_tests {
-    use super::*;
-    use tokio::{net::TcpListener, sync::mpsc};
-
-    #[tokio::test]
-    async fn metadata_only_request_and_late_reply_recovery() {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let (tx, mut received) = mpsc::channel(8);
-        let accept = tokio::spawn(async move {
-            let (tcp, _) = listener.accept().await.unwrap();
-            Stream::<ServerCommand, ClientCommand>::new(
-                None,
-                tcp,
-                Box::new(move |_, command| {
-                    let tx = tx.clone();
-                    async move {
-                        tx.send(command).await.unwrap();
-                    }
-                }),
-            )
-            .await
-            .unwrap()
-        });
-        let client = Client::new(TcpStream::connect(address).await.unwrap()).await.unwrap();
-        let server = accept.await.unwrap();
-        let metadata = LocalChartMetadata {
-            archive_sha256: "a".repeat(64),
-            content_sha256: "b".repeat(64),
-            size: 123,
-        };
-        let (result, ()) = tokio::join!(client.local_chart_metadata(), async {
-            let command = time::timeout(Duration::from_secs(2), received.recv()).await.unwrap().unwrap();
-            assert!(matches!(command, ClientCommand::GetLocalChartMetadata));
-            server.send(ServerCommand::LocalChartMetadata(Ok(metadata.clone()))).await.unwrap();
-        });
-        let result = result.unwrap();
-        assert_eq!(result.content_sha256, metadata.content_sha256);
-        assert!(received.try_recv().is_err(), "metadata lookup must not fetch chart chunks");
-
-        // Simulate a caller timing out before its reply arrives.
-        let (sender, receiver) = oneshot::channel();
-        drop(receiver);
-        *client.state.cb_local_metadata.lock().await = Some(sender);
-        let error = client.local_chart_metadata().await.unwrap_err();
-        assert!(format!("{error:#}").contains("Previous multiplayer request"));
-        assert!(received.try_recv().is_err(), "a retry must not overwrite the old callback");
-        process(Arc::clone(&client.state), ServerCommand::LocalChartMetadata(Ok(metadata.clone()))).await;
-        assert!(client.state.cb_local_metadata.lock().await.is_none());
-        // An unsolicited duplicate response must not panic the receive task either.
-        process(Arc::clone(&client.state), ServerCommand::LocalChartMetadata(Ok(metadata))).await;
     }
 }

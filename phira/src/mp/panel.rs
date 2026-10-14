@@ -1,12 +1,10 @@
 use crate::{
     client::{Chart, Ptr, UserManager},
-    data::{BriefChartInfo, LocalChart},
-    dir, get_data, get_data_mut,
-    mp::{cache, L10N_LOCAL},
-    save_data,
+    dir, get_data,
+    mp::L10N_LOCAL,
     scene::{compress_folder, Downloading, SongScene, LOCAL_MP_RESULT, RECORD_ID},
 };
-use anyhow::{anyhow, bail, ensure, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use inputbox::InputBox;
 use macroquad::prelude::*;
 use phira_mp_client::Client;
@@ -24,12 +22,60 @@ use prpr::{
 };
 use smallvec::SmallVec;
 use std::{
-    fs::File,
+    fs::{self, File},
     io::Cursor,
     path::{Path, PathBuf},
     sync::{atomic::Ordering, Arc},
 };
 use tracing::warn;
+use uuid::Uuid;
+
+/// Extract a checked room chart to a content-addressed folder.
+/// ZIP size and uncompressed size are both bounded to prevent archive bombs.
+fn install_room_chart(bytes: Vec<u8>, digest: String) -> Result<String> {
+    let root = PathBuf::from(dir::charts()?).join("mp-local");
+    fs::create_dir_all(&root)?;
+    let target = root.join(&digest);
+    let local_path = format!("mp-local/{digest}");
+    if target.exists() {
+        return Ok(local_path);
+    }
+    let mut zip = zip::ZipArchive::new(Cursor::new(&bytes))?;
+    if zip.len() > 4096 {
+        bail!("local chart archive has too many files");
+    }
+    let mut extracted = 0u64;
+    for i in 0..zip.len() {
+        let file = zip.by_index(i)?;
+        if file.enclosed_name().is_none() {
+            bail!("unsafe path in local chart archive");
+        }
+        extracted = extracted
+            .checked_add(file.size())
+            .ok_or_else(|| anyhow!("local chart archive too large"))?;
+        if extracted > 128 * 1024 * 1024 {
+            bail!("local chart archive expands beyond 128 MiB");
+        }
+    }
+    drop(zip);
+    let tmp = root.join(format!(".partial-{}", Uuid::new_v4()));
+    fs::create_dir(&tmp)?;
+    let result = (|| -> Result<()> {
+        let target_dir = prpr::dir::Dir::new(&tmp)?;
+        prpr::ext::unzip_into(Cursor::new(bytes), &target_dir, true)?;
+        let _: ChartInfo = serde_yaml::from_reader(File::open(tmp.join("info.yml"))?)?;
+        if target.exists() {
+            return Ok(());
+        }
+        fs::rename(&tmp, &target)?;
+        Ok(())
+    })();
+    if result.is_err() || tmp.exists() {
+        let _ = fs::remove_dir_all(&tmp);
+    }
+    result?;
+    Ok(local_path)
+}
 
 const ENTER_TRANSIT: f32 = 0.5;
 const USER_LIST_TRANSIT: f32 = 0.4;
@@ -58,8 +104,6 @@ impl Message {
             .multiline()
     }
 }
-
-type PreparedLocalChart = (String, Vec<String>);
 
 pub struct MPPanel {
     pub client: Option<Arc<Client>>,
@@ -96,17 +140,13 @@ pub struct MPPanel {
 
     download_task: Option<Task<Result<Arc<Chart>>>>,
     downloading: Option<Downloading>,
-    local_chart_task: Option<Task<Result<PreparedLocalChart>>>,
-    save_chart_task: Option<Task<Result<cache::SavedChart>>>,
-    save_chart_btn: DRectButton,
-    save_available: bool,
+    local_chart_task: Option<Task<Result<String>>>,
     local_path: Option<String>,
     // true for request_start, false for ready
     download_next: bool,
 
     chart_id: Option<i32>,
     game_start_consumed: bool,
-    playing_local: bool,
     need_upload: bool,
     entered: bool,
 
@@ -160,15 +200,11 @@ impl MPPanel {
             download_task: None,
             downloading: None,
             local_chart_task: None,
-            save_chart_task: None,
-            save_chart_btn: DRectButton::new(),
-            save_available: false,
             local_path: None,
             download_next: false,
 
             chart_id: None,
             game_start_consumed: false,
-            playing_local: false,
             need_upload: false,
             entered: false,
 
@@ -195,7 +231,6 @@ impl MPPanel {
             || self.chat_task.is_some()
             || self.download_task.is_some()
             || self.local_chart_task.is_some()
-            || self.save_chart_task.is_some()
             || self.task.is_some()
             || self.scene_task.is_some()
     }
@@ -225,10 +260,6 @@ impl MPPanel {
     }
 
     pub fn select_chart(&mut self, id: i32) {
-        if self.has_task() {
-            show_message("Wait for the current multiplayer operation to finish.").error();
-            return;
-        }
         let client = self.clone_client();
         if !client.blocking_is_host().unwrap() {
             show_message(mtl!("select-chart-host-only")).error();
@@ -246,10 +277,6 @@ impl MPPanel {
 
     /// Room host can select any locally imported chart without publishing it.
     pub fn select_local_chart(&mut self, path: String, name: String) {
-        if self.has_task() {
-            show_message("Wait for the current multiplayer operation to finish.").error();
-            return;
-        }
         let client = self.clone_client();
         if !client.blocking_is_host().unwrap_or(false) {
             show_message(mtl!("select-chart-host-only")).error();
@@ -260,17 +287,14 @@ impl MPPanel {
             return;
         }
         self.local_path = None;
-        self.save_available = false;
         self.task = Some(Task::new(async move {
             let source = Path::new(&dir::charts()?).join(path);
             if !source.is_dir() {
                 bail!("local chart folder was not found");
             }
-            let hash = cache::fingerprint(&source)?;
             let mut zip = Cursor::new(Vec::new());
             compress_folder(&source, &mut zip)?;
-            ensure!(cache::fingerprint(&source)? == hash, "local chart changed during upload preparation; retry");
-            client.upload_local_chart(name, zip.into_inner(), hash).await?;
+            client.upload_local_chart(name, zip.into_inner()).await?;
             Ok(())
         }));
     }
@@ -288,21 +312,9 @@ impl MPPanel {
         self.download_next = next;
         if id == -1 {
             let client = self.clone_client();
-            let saved = get_data().charts.iter().map(|chart| chart.local_path.clone()).collect::<Vec<_>>();
-            let protected = self.local_path.iter().cloned().collect::<Vec<_>>();
             self.local_chart_task = Some(Task::new(async move {
-                let charts = PathBuf::from(dir::charts()?);
-                let metadata = client.local_chart_metadata().await?;
-                let mut warnings = Vec::new();
-                if !metadata.content_sha256.is_empty() {
-                    if let Some(path) = cache::find(&charts, &metadata.content_sha256, &saved, &mut warnings)? {
-                        return Ok((path, warnings));
-                    }
-                }
                 let (bytes, digest) = client.download_local_chart().await?;
-                ensure!(digest == metadata.archive_sha256 && bytes.len() == metadata.size as usize, "room chart changed during download; retry");
-                let path = cache::install(&charts, bytes, &digest, &metadata.content_sha256, &protected)?;
-                Ok((path, warnings))
+                install_room_chart(bytes, digest)
             }));
         } else {
             self.download_task = Some(Task::new(async move { Ptr::new(id).fetch().await }));
@@ -394,12 +406,6 @@ impl MPPanel {
                         let text = self.chat_text.clone();
                         self.chat_task = Some(Task::new(async move { client.chat(text).await }));
                     }
-                    return true;
-                }
-                if matches!(state.state, RoomState::SelectChart(_)) && self.save_available && self.save_chart_btn.touch(touch, t) {
-                    let path = self.local_path.clone().unwrap();
-                    let saved = get_data().charts.iter().map(|chart| chart.local_path.clone()).collect::<Vec<_>>();
-                    self.save_chart_task = Some(Task::new(async move { cache::save(Path::new(&dir::charts()?), &path, &saved) }));
                     return true;
                 }
                 let is_host = state.is_host;
@@ -551,7 +557,6 @@ impl MPPanel {
                 if !self.game_start_consumed {
                     self.game_start_consumed = true;
                     let id = self.chart_id.unwrap();
-                    self.playing_local = id == -1;
                     RECORD_ID.store(-1, Ordering::Relaxed);
                     *LOCAL_MP_RESULT.lock().unwrap() = None;
                     self.need_upload = true;
@@ -643,60 +648,13 @@ impl MPPanel {
         if let Some(task) = &mut self.local_chart_task {
             if let Some(res) = task.take() {
                 match res {
-                    Ok((path, warnings)) => {
-                        if !warnings.is_empty() {
-                            show_error(anyhow!(warnings.join("\n\n")));
-                        }
+                    Ok(path) => {
                         self.local_path = Some(path);
-                        self.save_available = false;
                         self.post_download();
                     }
                     Err(err) => show_error(err.context("failed to receive multiplayer local chart")),
                 }
                 self.local_chart_task = None;
-            }
-        }
-        if let Some(task) = &mut self.save_chart_task {
-            if let Some(res) = task.take() {
-                match res {
-                    Ok(cache::SavedChart {
-                        path,
-                        info,
-                        already_saved,
-                        warnings,
-                    }) => {
-                        if !warnings.is_empty() {
-                            show_error(anyhow!(warnings.join("\n\n")));
-                        }
-                        self.local_path = Some(path.clone());
-                        if !get_data().charts.iter().any(|chart| chart.local_path == path) {
-                            get_data_mut().charts.push(LocalChart {
-                                info: BriefChartInfo { id: None, ..info.into() },
-                                local_path: path,
-                                record: None,
-                                mods: Mods::default(),
-                                played_unlock: false,
-                            });
-                        }
-                        crate::charts_view::NEED_UPDATE.store(true, Ordering::Relaxed);
-                        match save_data() {
-                            Ok(()) => {
-                                self.save_available = false;
-                                show_message(if already_saved {
-                                    mtl!("local-already-saved")
-                                } else {
-                                    mtl!("local-saved")
-                                })
-                                .ok();
-                            }
-                            Err(error) => {
-                                show_error(error.context("Chart files are saved, but the library could not be persisted. Retry Save to Local."))
-                            }
-                        }
-                    }
-                    Err(error) => show_error(error.context("failed to save multiplayer chart")),
-                }
-                self.save_chart_task = None;
             }
         }
         if let Some(dl) = &mut self.downloading {
@@ -780,8 +738,7 @@ impl MPPanel {
         }
         if self.need_upload && self.entered {
             let client = self.clone_client();
-            if self.playing_local {
-                self.save_available = self.local_path.is_some();
+            if self.chart_id == Some(-1) {
                 if let Some(record) = LOCAL_MP_RESULT.lock().unwrap().take() {
                     self.task = Some(Task::new(async move { client.played_local(record.score, record.accuracy, record.full_combo).await }));
                 } else {
@@ -906,9 +863,6 @@ impl MPPanel {
                         btns.push((&mut self.request_start_btn, mtl!("request-start").into_owned()));
                         btns.push((&mut self.lock_room_btn, mtl!("lock-room", "current" => state.locked.to_string())));
                         btns.push((&mut self.cycle_room_btn, mtl!("cycle-room", "current" => state.cycle.to_string())));
-                    }
-                    if self.save_available {
-                        btns.push((&mut self.save_chart_btn, mtl!("local-save").into_owned()));
                     }
                     btns.push((&mut self.leave_room_btn, mtl!("leave-room").into_owned()));
                 }
