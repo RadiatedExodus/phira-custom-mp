@@ -37,6 +37,7 @@ jobs:
             . -> target
             vendor/phira-mp -> target
           cache-on-failure: 'true'
+      # The separate server workspace has its own committed Cargo.lock.
       - name: Build Linux client and matching server
         run: |
           cargo build --locked --release -p phira-main
