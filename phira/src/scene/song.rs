@@ -87,6 +87,8 @@ static CONFIRM_UPLOAD: AtomicBool = AtomicBool::new(false);
 static CONFIRM_AUTOCOMPLETE: AtomicBool = AtomicBool::new(false);
 static SKIP_AUTOCOMPLETE: AtomicBool = AtomicBool::new(false);
 pub static RECORD_ID: AtomicI32 = AtomicI32::new(-1);
+/// Local multiplayer scores stay inside the room, never sent to the Phira website.
+pub static LOCAL_MP_RESULT: Lazy<Mutex<Option<SimpleRecord>>> = Lazy::new(Mutex::default);
 
 /// Matches any `@name#id (role)` or `@name#id` or `@name (role)` or `@name`.
 /// Parentheses may be ASCII `()` or fullwidth `（）`; whitespace before `(` is optional.
@@ -868,6 +870,7 @@ impl SongScene {
         if !rated && can_rated && mode == GameMode::Normal {
             show_message(tl!("warn-unrated")).warn();
         }
+        let is_local_mp = id.is_none() && client.is_some();
         let update_fn = client.and_then(|mut client| {
             let live = client.blocking_state().unwrap().live;
             let token = get_data().tokens.as_ref().map(|it| it.0.clone()).unwrap();
@@ -973,6 +976,9 @@ impl SongScene {
         let save_fn: Option<SaveFn> = Some(Box::new({
             let local_path = local_path.to_string();
             move |new_rec| -> Result<()> {
+                if is_local_mp {
+                    *LOCAL_MP_RESULT.lock().unwrap() = Some(new_rec.clone());
+                }
                 let rec = get_data_mut()
                     .charts
                     .iter_mut()

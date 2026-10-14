@@ -1,0 +1,25 @@
+name: Custom multiplayer server
+
+on:
+  push:
+    paths:
+      - "vendor/phira-mp/**"
+      - ".github/workflows/check-custom-mp.yml"
+  pull_request:
+    paths:
+      - "vendor/phira-mp/**"
+      - ".github/workflows/check-custom-mp.yml"
+
+jobs:
+  server-build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        run: rustup toolchain install stable
+      - name: Check multiplayer server and client
+        run: cargo check --manifest-path vendor/phira-mp/Cargo.toml --workspace
+      - name: Run multiplayer protocol tests
+        run: cargo test --manifest-path vendor/phira-mp/Cargo.toml -p phira-mp-common

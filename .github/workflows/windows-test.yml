@@ -1,0 +1,70 @@
+name: Windows test client
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [multiplayer-host-local-charts]
+    paths:
+      - '.github/workflows/windows-test.yml'
+      - '**/*.rs'
+      - '**/Cargo.toml'
+      - 'Cargo.lock'
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        run: |
+          rustup toolchain install
+          rustup target add x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: windows-x64
+          cache-on-failure: 'true'
+      - name: Install static zlib for FFmpeg
+        shell: pwsh
+        run: |
+          & "$env:VCPKG_INSTALLATION_ROOT/vcpkg.exe" install zlib:x64-windows-static-md
+          if ($LASTEXITCODE -ne 0) { throw 'zlib installation failed' }
+          $libdir = "$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows-static-md/lib"
+          $zlib = @(Get-ChildItem "$libdir/*.lib")
+          if ($zlib.Count -ne 1) { throw 'Expected one static zlib library' }
+          Copy-Item $zlib[0].FullName "$libdir/z.lib"
+          "LIB=$libdir;$env:LIB" | Out-File -FilePath $env:GITHUB_ENV -Append
+      - name: Build Windows client with video
+        run: cargo build --locked --release -p phira-main --target x86_64-pc-windows-msvc
+      - name: Test private chart selection
+        run: cargo test --locked --release -p phira --lib multiplayer_selection_tests --target x86_64-pc-windows-msvc
+      - name: Package portable client
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Invoke-WebRequest 'https://github.com/TeamFlos/phira/releases/download/v0.8.2/Phira-windows-x86_64-v0.8.2.zip' -OutFile template.zip
+          if ((Get-FileHash template.zip -Algorithm SHA256).Hash.ToLowerInvariant() -ne '7a881fd48cd156201d0b1cb700e003fb58cc01ebcfadad1e9c865d0f3282bc41') { throw 'Template checksum mismatch' }
+          Expand-Archive template.zip -DestinationPath template
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item template/assets dist/assets -Recurse
+          Copy-Item assets/* dist/assets -Recurse -Force
+          Copy-Item target/x86_64-pc-windows-msvc/release/phira-main.exe dist/Phira-Private-Charts.exe
+          Copy-Item LICENSE dist/LICENSE
+          Copy-Item docs/windows-test-build.md dist/README.md
+          @('@echo off', 'cd /d "%~dp0"', 'Phira-Private-Charts.exe') | Set-Content dist/Start-Phira.cmd -Encoding ascii
+          git rev-parse HEAD | Set-Content dist/source-commit.txt
+          if (!(Test-Path dist/assets/font.ttf)) { throw 'Missing font' }
+          $exe = [IO.File]::ReadAllBytes((Resolve-Path dist/Phira-Private-Charts.exe))
+          if ($exe[0] -ne 77 -or $exe[1] -ne 90) { throw 'Invalid Windows executable' }
+          $pe = [BitConverter]::ToInt32($exe, 60)
+          if ([BitConverter]::ToUInt16($exe, $pe + 4) -ne 0x8664) { throw 'Expected x64 executable' }
+          (Get-FileHash dist/Phira-Private-Charts.exe -Algorithm SHA256).Hash.ToLowerInvariant() + '  Phira-Private-Charts.exe' | Set-Content dist/SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: phira-private-charts-windows-x64-${{ github.sha }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 30

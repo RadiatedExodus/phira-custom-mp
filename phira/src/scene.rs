@@ -13,7 +13,7 @@ mod main;
 pub use main::{MainScene, BGM_VOLUME_UPDATED, MP_PANEL};
 
 mod song;
-pub use song::{compress_folder, Downloading, SongScene, RECORD_ID};
+pub use song::{compress_folder, Downloading, SongScene, LOCAL_MP_RESULT, RECORD_ID};
 #[cfg(feature = "video")]
 mod unlock;
 #[cfg(feature = "video")]

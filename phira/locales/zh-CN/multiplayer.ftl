@@ -56,7 +56,7 @@ chat-sent = 已发送
 chat-send-failed = 消息发送失败
 
 select-chart-host-only = 只有房主可以选择谱面
-select-chart-local = 不能选择本地谱面
+select-chart-local = 此谱面没有可传输的本地文件夹。请先导入谱面，再由房主在本地列表中选择；暂不支持内置谱面。
 select-chart-failed = 选择谱面失败
 select-chart-not-now = 你现在不能选择谱面
 
