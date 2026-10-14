@@ -20,7 +20,7 @@ Build the modified Phira app from the repository root as usual. Set **Multiplaye
 4. Start the room. Everyone (including the host) downloads and caches that chart as `mp-local/<sha256>` when they start/ready, then plays it together.
 5. Late joiners can download the selected chart while the room is still in chart-selection state.
 
-Official Phira chart IDs remain supported and keep their normal downloading and result-upload behavior.
+Official Phira chart IDs remain supported for catalogue selection and downloading. However, these public-source Windows and Android builds cannot submit official scores, including catalogue chart scores: they lack the closed official score-record/attestation implementation. Use the official client for official scores and RKS. Login/authentication is unchanged.
 
 ## Limits and behavior
 
@@ -42,10 +42,12 @@ cargo check -p phira
 cargo test --manifest-path vendor/phira-mp/Cargo.toml --workspace
 ```
 
-This implementation needs end-to-end verification with two running modified clients and the modified server before production use. In particular, test ZIP extraction, network disconnection mid-upload, switching back to official charts, score completion, and replay of a selected local chart.
+Basic private sharing with the modified Linux server and Windows–Android crossplay have been user-tested. This is not comprehensive end-to-end coverage. Before production use, test ZIP extraction, network disconnection mid-upload, switching back to official charts, score completion, and replay of a selected local chart.
 
 ## Current cache policy
 
 Currently, transferred charts are cached under `mp-local/<SHA-256>`. They aren’t added to the visible Local library. The hash identifies the downloaded content, so receiving the exact same archive can reuse its cached copy.
 
 This is the archive SHA-256, not a catalog chart ID. The client still receives and verifies the ZIP before checking for an existing extracted cache folder; reuse avoids repeated extraction, but does not skip the network transfer or readiness wait. There is no Save to Local button and no new content-hash metadata protocol. The previously working private-chart server remains compatible. Authentication is unchanged.
+
+Cached files can remain on disk after a match; there is no bounded cache eviction policy. Repacking the same chart can change the archive hash and create a different cache folder, although received charts never create visible Local library entries. See the [README](../README.md#server-structure-and-setup) for the server layout and current build downloads.

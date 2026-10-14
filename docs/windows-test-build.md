@@ -10,10 +10,10 @@ room host select an imported local chart. All participants need compatible
 modified clients; an upstream MP server does not support private charts.
 Test Windows hosting and Android joining, then reverse the roles.
 
-The multiplayer protocol is unchanged from Android build dbf9386.
+Use the matching client and vendored server described in the repository README.
 Login/authentication remains unchanged. Selection uploads the chart; starting
 downloads and verifies it for each player, so some delay is expected.
-Private scores are room-only. Official score submission may be unavailable
+Private scores are room-only. Official score submission is unavailable, including for catalogue charts,
 because the public build lacks the closed official attestation code.
 
 The workflow verifies compilation, required assets and executable architecture.

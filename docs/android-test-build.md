@@ -25,6 +25,6 @@ All players must use the modified client and a server built from this branch's
 `vendor/phira-mp`. Follow `docs/multiplayer-host-local-charts.md`. Login and
 authentication requirements are unchanged. A normal upstream MP server cannot
 transfer private charts. The public-source build does not include the closed
-official score-attestation implementation; official score submission may be
-unavailable, as noted in the upstream build guide. Private room scores use the
+official score-attestation implementation; official score submission is
+unavailable, including for catalogue charts, as noted in the upstream build guide. Private room scores use the
 branch's room-only reporting. Full two-client gameplay needs device testing.
